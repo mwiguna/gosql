@@ -78,6 +78,7 @@ export function resetConnectionTree(clearCatalogs = false) {
   collapsedConnections = new Set(state.connectedConnectionIds);
   expanded.clear();
   treeOpen.clear();
+  searchConnections = "";
   if (clearCatalogs) databaseCatalogs.clear();
 }
 
@@ -96,7 +97,12 @@ export function revealTreeDestination(connection, destination, isView) {
 export function getConnectionSearch() { return searchConnections; }
 
 export function bindConnectionSearch() {
-  findElement("#connection-search").oninput = event => {
+  const input = findElement("#connection-search");
+  input.value = searchConnections;
+  // Kolom pencarian tetap readonly saat tidak dipakai agar pengelola sandi browser tidak mengisinya sebagai username.
+  input.onfocus = () => { input.readOnly = false; };
+  input.onblur = () => { input.readOnly = true; };
+  input.oninput = event => {
     searchConnections = event.target.value;
     renderTree();
   };
@@ -320,8 +326,8 @@ function renderConnectionForm() {
       const displayFile = connection.file?.split(/[\\/]/).at(-1) || "No file selected";
       fields = `${nameField}
         <label class="full">File location<select name="location" id="sqlite-location">
-          ${state.nativeFilePickerAllowed || connection.location === "Native file" ? `<option value="Native file" ${connection.location === "Native file" ? "selected" : ""}>Choose file on GoSQL server</option>` : ""}
-          <option value="Local file" ${connection.location === "Local file" ? "selected" : ""}>Enter server file path</option>
+          ${state.nativeFilePickerAllowed || connection.location === "Native file" ? `<option value="Native file" ${connection.location === "Native file" ? "selected" : ""}>Choose File</option>` : ""}
+          <option value="Local file" ${connection.location === "Local file" ? "selected" : ""}>Enter File Path</option>
           <option value="Server upload" ${uploadCopy ? "selected" : ""}>Upload Copy</option>
         </select></label>
         ${uploadCopy ? `<label class="full">Upload SQLite database
@@ -331,7 +337,7 @@ function renderConnectionForm() {
           <input name="file" value="${escapeHtml(connection.file || "")}" placeholder="/path/to/database.sqlite" required>
         </label><p class="hint full">The file must already exist and be readable and writable by the GoSQL server process.</p>`
           : state.nativeFilePickerAllowed ? `<div class="full row">${button("choose-sqlite-file", "Choose SQLite file", "file")}<span id="sqlite-file-name" class="hint">${escapeHtml(displayFile)}</span></div><p class="hint full">The file chooser opens on the computer running GoSQL.</p>`
-            : `<p class="hint full">Current server file: ${escapeHtml(connection.file || "No file selected")}. Select “Enter server file path” to change it.</p>`}
+            : `<p class="hint full">Current server file: ${escapeHtml(connection.file || "No file selected")}. Select “Enter File Path” to change it.</p>`}
         <div class="notice warning full" ${connection.location === "Native file" && !connection.file ? "hidden" : ""}>
           ${icon(uploadCopy ? "upload" : "file")}<span>${fileNotice}</span>
         </div>`;
@@ -342,7 +348,7 @@ function renderConnectionForm() {
       fields = `${nameField}
         <label>Host<input name="host" value="${escapeHtml(connection.host)}" required placeholder="localhost"></label>
         <label>Port<input name="port" type="number" min="1" max="65535" value="${escapeHtml(connection.port)}" required></label>
-        <label>Username<input name="username" value="${escapeHtml(connection.username)}" required></label>
+        <label>Username<input name="username" value="${escapeHtml(connection.username)}" required autocomplete="off"></label>
         ${databaseField}
         <div class="notice full">${icon("lock")}
           <span>You will be asked for your database password when connecting. Passwords are never saved to this profile.</span>
@@ -374,8 +380,9 @@ function renderConnectionForm() {
 
   const body = `<div class="engine-picker">${engineButtons}</div>
     <div class="form-tabs">${paneButtons}</div>
-    <form id="connection-form"><div class="form-grid">${fields}</div></form>
-    ${["PostgreSQL", "MySQL", "MariaDB"].includes(connection.engine) ? '<label>Database password for test<input id="connection-password" type="password" autocomplete="off"></label>' : ""}
+    <form id="connection-form" autocomplete="off"><div class="form-grid">${fields}</div>
+      ${["PostgreSQL", "MySQL", "MariaDB"].includes(connection.engine) ? '<label>Database password for test<input id="connection-password" type="password" autocomplete="new-password"></label>' : ""}
+    </form>
     <div id="connection-test" class="hint" style="margin-top:15px"></div>`;
   const footer = button("test-connection", "Test Connection", "refresh")
     + '<span class="spacer"></span>'
@@ -463,8 +470,11 @@ async function saveConnection() {
     }
     if (state.currentUser?.id !== userId) return;
     const profile = connectionFromProfile(saved);
-    if (!id) state.connections.push(profile);
-    else {
+    if (!id) {
+      state.connections.push(profile);
+      treeOpen.set("engine:" + profile.engine, true);
+      searchConnections = "";
+    } else {
       const index = state.connections.findIndex(item => item.id === id);
       state.connections[index] = profile;
       state.tabs = state.tabs.filter(tab => tab.connectionId !== id);

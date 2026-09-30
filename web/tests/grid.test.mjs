@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { getFilteredRows, matchesGroup, pageNumbers, toggleColumnSort } from "../features/grid.js";
+import { getFilteredRows, matchesGroup, pageNumbers, renderData, toggleColumnSort } from "../features/grid.js";
+import { state } from "../state.js";
 
 const rows = [
   { id: "10", name: "Charlie", status: "active", note: null },
@@ -45,4 +46,22 @@ test("pagination keeps first and last page visible", () => {
   assert.deepEqual(pageNumbers(1, 1), [1]);
   assert.deepEqual(pageNumbers(5, 10), [1, "…", 3, 4, 5, 6, 7, "…", 10]);
   assert.deepEqual(pageNumbers(10, 10), [1, "…", 6, 7, 8, 9, 10]);
+});
+
+test("cursor pagination renders the current page at button size", context => {
+  const pagination = { innerHTML: "" };
+  const elements = {
+    "#data-area": { querySelector: selector => elements[selector] ?? null },
+    "#remote-status": { classList: { toggle() {} } },
+    "#reconnect-table": {}, "#delete-selected": {}, "#remote-add-row": {},
+    '[data-action="refresh-table"]': {}, "#pagination": pagination, "#page-size": {}
+  };
+  globalThis.document = { querySelector: selector => elements[selector] ?? null };
+  state.tabs = [{ id: "cursor", remote: true, view: "Data", page: 2, pageSize: 20,
+    cursorPaging: true, loading: true, rows: [], schema: [], hasMore: true }];
+  state.activeTabId = "cursor";
+  context.after(() => { delete globalThis.document; state.tabs = []; state.activeTabId = null; });
+  renderData();
+  assert.match(pagination.innerHTML, /class="page-current" aria-current="page">2<\/span>/);
+  assert.doesNotMatch(pagination.innerHTML, /class="pill">2<\/span>/);
 });

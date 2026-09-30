@@ -52,7 +52,11 @@ func Open(ctx context.Context, path string, readOnly bool) (*sql.DB, *sql.Conn, 
 		mode = "ro"
 	}
 	options := url.Values{"mode": {mode}, "_pragma": {"foreign_keys(1)", "busy_timeout(3000)", "trusted_schema(0)"}}
-	uri := url.URL{Scheme: "file", Path: filepath.ToSlash(path), RawQuery: options.Encode()}
+	uriPath := filepath.ToSlash(path)
+	if filepath.VolumeName(path) != "" && !strings.HasPrefix(uriPath, "/") {
+		uriPath = "/" + uriPath
+	}
+	uri := url.URL{Scheme: "file", Path: uriPath, RawQuery: options.Encode()}
 	db, err := sql.Open("sqlite", uri.String())
 	if err != nil {
 		return nil, nil, err
