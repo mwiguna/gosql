@@ -643,7 +643,7 @@ p {
   background: #f8fafd;
   border-bottom: 1px solid var(--line);
   padding-left: 6px;
-  padding-bottom: 9px;
+  padding-bottom: 3px;
   overflow-x: auto;
 }
 .workspace-tab {
@@ -689,10 +689,12 @@ p {
   width: 15px;
 }
 .workspace-tabs > button {
-  align-self: center;
-  margin: 0 6px;
+  align-self: flex-end;
+  margin: 0 6px 3px;
   flex-shrink: 0;
-  transform: translateY(3px);
+}
+.sidebar-search input::-webkit-search-cancel-button {
+  cursor: pointer;
 }
 .workspace-tabs > button[data-action="new-query"]:hover,
 .workspace-tabs > button[data-action="new-query"]:focus-visible {
@@ -1061,7 +1063,7 @@ p {
   height: 10px;
 }
 .workspace-tabs::-webkit-scrollbar {
-  height: 6px;
+  height: 10px;
 }
 .tree::-webkit-scrollbar-thumb,
 .workspace-tabs::-webkit-scrollbar-thumb,
@@ -1229,13 +1231,24 @@ p {
   padding: 5px 8px;
   font-size: 11px;
 }
-.pagination button {
-  min-height: 27px;
-  height: 27px;
-  min-width: 27px;
-  padding: 4px;
+.pagination button,
+.pagination .page-current {
+  min-height: 32px;
+  height: 32px;
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
 }
-.pagination button.active {
+.pagination .page-current {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--blue);
+  border-radius: 5px;
+  font-weight: 700;
+}
+.pagination button.active,
+.pagination .page-current {
   background: var(--blue);
   color: white;
   border-color: var(--blue);

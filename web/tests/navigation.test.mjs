@@ -2,6 +2,23 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openQueryTab, openTable, readTableLocation, tableLocation } from "../features/workspace.js";
 import { state } from "../state.js";
+import { bindConnectionSearch, getConnectionSearch, resetConnectionTree } from "../features/connections.js";
+
+test("connection search is cleared when a workspace starts", context => {
+  const input = {};
+  globalThis.document = { querySelector: selector => selector === "#connection-search" ? input : null };
+  context.after(() => { delete globalThis.document; resetConnectionTree(); });
+  bindConnectionSearch();
+  assert.equal(input.readOnly, undefined);
+  input.onfocus();
+  assert.equal(input.readOnly, false);
+  input.onblur();
+  assert.equal(input.readOnly, true);
+  input.oninput({ target: { value: "previous user" } });
+  assert.equal(getConnectionSearch(), "previous user");
+  resetConnectionTree();
+  assert.equal(getConnectionSearch(), "");
+});
 
 test("table and database links round-trip all workspace views and escaped names", () => {
   for (const table of [undefined, "customers", "customer_summary"]) {

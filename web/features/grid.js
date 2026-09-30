@@ -199,7 +199,7 @@ function renderRemoteData(tab) {
   const countStatus = tab.countError
     ? `<span class="error-text" role="status">Row count unavailable: ${escapeHtml(tab.countError)}</span>${button("retry-count", "Retry count", "refresh", "ghost")}`
     : tab.countLoading ? '<span role="status">Counting rows…</span>' : "";
-  const pageButtons = tab.cursorPaging || pages === null ? `<span class="pill">${tab.page}</span>` : pageNumbers(tab.page, pages).map(page =>
+  const pageButtons = tab.cursorPaging || pages === null ? `<span class="page-current" aria-current="page">${tab.page}</span>` : pageNumbers(tab.page, pages).map(page =>
     page === "…" ? '<span class="page-ellipsis" aria-hidden="true">…</span>' :
       button("page", String(page), "", page === tab.page ? "active" : "", `data-page="${page}" aria-label="Page ${page}" ${page === tab.page ? 'aria-current="page"' : ""} ${disabled}`)
   ).join("");

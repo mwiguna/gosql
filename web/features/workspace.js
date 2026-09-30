@@ -74,7 +74,7 @@ export function renderAppShell() {
       <aside class="sidebar" aria-label="Connections">
         <div class="sidebar-title">Connections${iconButton("add-connection", "New connection", "plus")}</div>
         <div class="sidebar-search">${icon("search")}
-          <input aria-label="Find connection" placeholder="Find a connection…"
+          <input type="search" autocomplete="off" readonly aria-label="Find connection" placeholder="Find a connection…"
             value="${escapeHtml(getConnectionSearch())}" id="connection-search">
         </div>
         <nav class="tree" id="tree"></nav>
