@@ -1,0 +1,5 @@
+node_modules/
+backend/.cache/
+backend/dist/
+backend/data/
+releases/
