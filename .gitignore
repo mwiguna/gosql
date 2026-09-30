@@ -3,3 +3,4 @@ backend/.cache/
 backend/dist/
 backend/data/
 releases/
+.DS_Store
