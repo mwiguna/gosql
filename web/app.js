@@ -5,10 +5,10 @@ import { initializeSession, logout, handleSessionExpired } from "./features/sess
 import { initializeApi } from "./api.js";
 import {
   handleWorkspaceAction, initializeWorkspace, openTable, renderAppShell,
-  resetWorkspace, restoreTableLocation, startWorkspace, tableLocation, loadTablePage, retryTableCount
+  resetWorkspace, restoreTableLocation, startWorkspace, tableLocation, loadTablePage, retryTableCount, openQueryTab
 } from "./features/workspace.js";
 import {
-  handleConnectionsAction, initializeConnections, connectToDatabase, getConnectionCatalog
+  handleConnectionsAction, initializeConnections, connectToDatabase, getConnectionCatalog, objectSQLTemplate
 } from "./features/connections.js";
 import { handleEditorAction, loadEditorLibrary } from "./features/editor.js";
 import { handleQueriesAction, runQuery, stopQueryForTab } from "./features/queries.js";
@@ -19,8 +19,19 @@ import { handleGridAction, loadGridLibrary, initializeGrid } from "./features/gr
 // -----------------------------------------------------------------------------
 // User actions
 // -----------------------------------------------------------------------------
-function handleAppAction(action) {
+function handleAppAction(action, element) {
   switch (action) {
+    case "create-view":
+    case "create-function":
+    case "create-procedure": {
+      const connection = getConnectionById(element.dataset.id);
+      const database = element.dataset.db;
+      const schema = element.dataset.schema || "";
+      if (!connection || !database) break;
+      const sql = objectSQLTemplate(connection.engine, database, schema, action.slice("create-".length));
+      openQueryTab(sql, { connectionId: connection.id, db: database, schemaName: schema, table: "" });
+      break;
+    }
     case "close-dialog":
       closeDialog();
       break;
@@ -103,6 +114,7 @@ function openNavigationMenu(element, x, y) {
   } else if (action === "database") {
     const attributes = `data-id="${escapeHtml(id)}" data-db="${escapeHtml(database)}"`;
     add("saved", "Saved Queries", attributes);
+    add("refresh-database", "Refresh Objects", attributes);
     if (connection?.engine !== "SQLite" || connection.location === "Server upload") add("database-export", connection?.engine === "SQLite" ? "Download SQLite File" : "Export Database", attributes);
     if (connection?.engine !== "SQLite") add("database-import", "Import File", attributes);
     if (["PostgreSQL", "MySQL", "MariaDB", "SQLite"].includes(connection?.engine)) {
@@ -123,6 +135,15 @@ function openNavigationMenu(element, x, y) {
     add("create-table", "Create Table", attributes);
     add("rename-schema", "Rename Schema", attributes);
     add("delete-schema", "Delete Schema", attributes);
+  } else if (action === "object-group" && connection) {
+    const attributes = `data-id="${escapeHtml(id)}" data-db="${escapeHtml(database)}" data-schema="${escapeHtml(schema)}"`;
+    const protectedMySQL = ["MySQL", "MariaDB"].includes(connection.engine) && ["mysql", "information_schema", "performance_schema", "sys"].includes(database.toLowerCase());
+    if (!protectedMySQL) {
+      if (element.dataset.kind === "Views") add("create-view", "Add View", attributes);
+      if (element.dataset.kind === "Triggers") add("create-trigger", "Add Trigger", attributes);
+      if (element.dataset.kind === "Functions") add("create-function", "Add Function", attributes);
+      if (element.dataset.kind === "Procedures") add("create-procedure", "Add Stored Procedure", attributes);
+    }
   } else if (action === "toggle-connection") {
     if (!connection) return false;
     const attributes = `data-id="${escapeHtml(id)}"`;

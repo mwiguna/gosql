@@ -570,6 +570,11 @@ func (a *application) handleMySQLConstraint(w http.ResponseWriter, r *http.Reque
 				statement += "ADD CONSTRAINT " + mysqldb.Identifier(input.Name) + " UNIQUE (" + columns + ")"
 			}
 		case "FOREIGN KEY":
+			actions, actionErr := foreignKeyActions(input, false)
+			if actionErr != nil {
+				writeError(w, 400, "invalid_foreign_key_action", actionErr.Error())
+				return
+			}
 			if input.ReferenceSchema != "" && input.ReferenceSchema != input.Database {
 				writeError(w, 400, "invalid_reference", "Foreign keys must reference the same database.")
 				return
@@ -599,7 +604,7 @@ func (a *application) handleMySQLConstraint(w http.ResponseWriter, r *http.Reque
 				writeMySQLError(w, checkErr)
 				return
 			}
-			statement += "ADD CONSTRAINT " + mysqldb.Identifier(input.Name) + " FOREIGN KEY (" + columns + ") REFERENCES " + mysqlTableName(input.Database, input.ReferenceTable) + " (" + reference + ")"
+			statement += "ADD CONSTRAINT " + mysqldb.Identifier(input.Name) + " FOREIGN KEY (" + columns + ") REFERENCES " + mysqlTableName(input.Database, input.ReferenceTable) + " (" + reference + ")" + actions
 		case "CHECK":
 			columnNames := make([]string, len(meta.Columns))
 			for i, column := range meta.Columns {

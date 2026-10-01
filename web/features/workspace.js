@@ -358,7 +358,7 @@ export function openQueryTab(text, destination) {
   }
   const count = state.tabs.filter((tab) => tab.queryTab).length;
   const tab = createWorkspaceTab(parent.connectionId, parent.db, parent.table, false, parent.schemaName);
-  tab.schema = structuredClone(parent.schema);
+  tab.schema = structuredClone(parent.schema || []);
   tab.title = "Query " + (count + 1);
   tab.queryTab = true;
   tab.consoleOpen = true;

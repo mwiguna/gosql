@@ -19,6 +19,9 @@ type mysqlCatalog struct {
 	Databases    []string          `json:"databases"`
 	Tables       []string          `json:"tables,omitempty"`
 	Views        []string          `json:"views,omitempty"`
+	Functions    []string          `json:"functions,omitempty"`
+	Procedures   []string          `json:"procedures,omitempty"`
+	Triggers     []schemaTrigger   `json:"triggers,omitempty"`
 	TableEngines map[string]string `json:"tableEngines,omitempty"`
 }
 
@@ -164,7 +167,7 @@ func (a *application) handleMySQLDatabaseCatalog(w http.ResponseWriter, r *http.
 		writeMySQLError(w, err)
 		return
 	}
-	result := mysqlCatalog{Databases: session.databaseList(), Tables: []string{}, Views: []string{}, TableEngines: map[string]string{}}
+	result := mysqlCatalog{Databases: session.databaseList(), Tables: []string{}, Views: []string{}, Functions: []string{}, Procedures: []string{}, Triggers: []schemaTrigger{}, TableEngines: map[string]string{}}
 	for rows.Next() {
 		var table, kind, engine string
 		if err = rows.Scan(&table, &kind, &engine); err != nil {
@@ -185,7 +188,162 @@ func (a *application) handleMySQLDatabaseCatalog(w http.ResponseWriter, r *http.
 		writeMySQLError(w, err)
 		return
 	}
+	routines, err := conn.QueryContext(ctx, "SELECT ROUTINE_NAME,ROUTINE_TYPE FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA=? ORDER BY ROUTINE_NAME", name)
+	if err != nil {
+		writeMySQLError(w, err)
+		return
+	}
+	for routines.Next() {
+		var routine, kind string
+		if err = routines.Scan(&routine, &kind); err != nil {
+			break
+		}
+		if kind == "FUNCTION" {
+			result.Functions = append(result.Functions, routine)
+		}
+		if kind == "PROCEDURE" {
+			result.Procedures = append(result.Procedures, routine)
+		}
+	}
+	if err == nil {
+		err = routines.Err()
+	}
+	routines.Close()
+	if err != nil {
+		writeMySQLError(w, err)
+		return
+	}
+	triggers, err := conn.QueryContext(ctx, "SELECT TRIGGER_NAME,EVENT_OBJECT_TABLE FROM INFORMATION_SCHEMA.TRIGGERS WHERE TRIGGER_SCHEMA=? ORDER BY EVENT_OBJECT_TABLE,TRIGGER_NAME", name)
+	if err != nil {
+		writeMySQLError(w, err)
+		return
+	}
+	for triggers.Next() {
+		var trigger schemaTrigger
+		if err = triggers.Scan(&trigger.Name, &trigger.Table); err != nil {
+			break
+		}
+		result.Triggers = append(result.Triggers, trigger)
+	}
+	if err == nil {
+		err = triggers.Err()
+	}
+	triggers.Close()
+	if err != nil {
+		writeMySQLError(w, err)
+		return
+	}
 	writeJSON(w, 200, result)
+}
+
+func (a *application) handleMySQLRoutine(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	database, name, kind := query.Get("database"), query.Get("name"), query.Get("kind")
+	if !mysqldb.ValidName(database) || !mysqldb.ValidName(name) || (kind != "function" && kind != "procedure") {
+		writeError(w, 400, "invalid_routine", "Choose a function or procedure.")
+		return
+	}
+	conn, ctx, cleanup := a.openMySQLRequest(w, r, database, false)
+	if conn == nil {
+		return
+	}
+	defer cleanup()
+	statement := "SHOW CREATE " + strings.ToUpper(kind) + " " + mysqldb.Identifier(database) + "." + mysqldb.Identifier(name)
+	definition, err := readMySQLCreate(ctx, conn, statement, "Create "+kind)
+	if err != nil {
+		writeMySQLError(w, err)
+		return
+	}
+	if definition == "" {
+		writeError(w, 403, "routine_definition_unavailable", "The database account cannot read this routine definition.")
+		return
+	}
+	var returns, deterministic, access, security, comment sql.NullString
+	err = conn.QueryRowContext(ctx, `SELECT DTD_IDENTIFIER,IS_DETERMINISTIC,SQL_DATA_ACCESS,SECURITY_TYPE,ROUTINE_COMMENT
+		FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA=? AND ROUTINE_NAME=? AND ROUTINE_TYPE=?`, database, name, strings.ToUpper(kind)).Scan(&returns, &deterministic, &access, &security, &comment)
+	if err != nil {
+		writeMySQLError(w, err)
+		return
+	}
+	metadata := map[string]string{"Security": security.String, "Deterministic": deterministic.String, "SQL access": access.String}
+	if kind == "function" {
+		metadata["Returns"] = returns.String
+	}
+	if comment.String != "" {
+		metadata["Comment"] = comment.String
+	}
+	writeJSON(w, 200, map[string]any{"definition": definition, "metadata": metadata})
+}
+
+func (a *application) handleMySQLTrigger(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		a.changeMySQLTrigger(w, r)
+		return
+	}
+	query := r.URL.Query()
+	database, table, name := query.Get("database"), query.Get("table"), query.Get("name")
+	if !mysqldb.ValidName(database) || !mysqldb.ValidName(table) || !mysqldb.ValidName(name) {
+		writeError(w, 400, "invalid_trigger", "Choose a trigger.")
+		return
+	}
+	conn, ctx, cleanup := a.openMySQLRequest(w, r, database, false)
+	if conn == nil {
+		return
+	}
+	defer cleanup()
+	var timing, event, actualTable string
+	err := conn.QueryRowContext(ctx, `SELECT ACTION_TIMING,EVENT_MANIPULATION,EVENT_OBJECT_TABLE FROM INFORMATION_SCHEMA.TRIGGERS
+		WHERE TRIGGER_SCHEMA=? AND TRIGGER_NAME=? AND EVENT_OBJECT_TABLE=?`, database, name, table).Scan(&timing, &event, &actualTable)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 404, "trigger_not_found", "This trigger no longer exists. Refresh the sidebar.")
+		return
+	}
+	if err != nil {
+		writeMySQLError(w, err)
+		return
+	}
+	definition, err := readMySQLCreate(ctx, conn, "SHOW CREATE TRIGGER "+mysqldb.Identifier(database)+"."+mysqldb.Identifier(name), "SQL Original Statement")
+	if err != nil {
+		writeMySQLError(w, err)
+		return
+	}
+	if definition == "" {
+		writeError(w, 403, "trigger_definition_unavailable", "The database account cannot read this trigger definition.")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"definition": definition, "metadata": map[string]string{"Table": actualTable, "Timing": timing, "Event": event}})
+}
+
+func readMySQLCreate(ctx context.Context, conn *sql.Conn, statement, columnName string) (string, error) {
+	rows, err := conn.QueryContext(ctx, statement)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	columns, err := rows.Columns()
+	if err != nil {
+		return "", err
+	}
+	values := make([]sql.NullString, len(columns))
+	fields := make([]any, len(columns))
+	for index := range values {
+		fields[index] = &values[index]
+	}
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return "", err
+		}
+		return "", sql.ErrNoRows
+	}
+	if err := rows.Scan(fields...); err != nil {
+		return "", err
+	}
+	for index, column := range columns {
+		if strings.EqualFold(column, columnName) && values[index].Valid {
+			return values[index].String, nil
+		}
+	}
+	return "", nil
 }
 
 func (a *application) openMySQLRequest(w http.ResponseWriter, r *http.Request, database string, multiStatements bool) (*sql.Conn, context.Context, func()) {

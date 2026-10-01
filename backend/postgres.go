@@ -21,9 +21,12 @@ import (
 )
 
 type postgresSchema struct {
-	Name   string   `json:"name"`
-	Tables []string `json:"tables"`
-	Views  []string `json:"views"`
+	Name       string          `json:"name"`
+	Tables     []string        `json:"tables"`
+	Views      []string        `json:"views"`
+	Functions  []string        `json:"functions"`
+	Procedures []string        `json:"procedures"`
+	Triggers   []schemaTrigger `json:"triggers"`
 }
 
 type postgresResult struct {
@@ -209,7 +212,7 @@ func readPostgresCatalog(ctx context.Context, conn *pgx.Conn) (postgresResult, e
 			return postgresResult{}, err
 		}
 		if len(result.Schemas) == 0 || result.Schemas[len(result.Schemas)-1].Name != schema {
-			result.Schemas = append(result.Schemas, postgresSchema{Name: schema, Tables: []string{}, Views: []string{}})
+			result.Schemas = append(result.Schemas, postgresSchema{Name: schema, Tables: []string{}, Views: []string{}, Functions: []string{}, Procedures: []string{}, Triggers: []schemaTrigger{}})
 		}
 		if name == nil || kind == nil {
 			continue
@@ -246,7 +249,63 @@ func readPostgresCatalog(ctx context.Context, conn *pgx.Conn) (postgresResult, e
 		}
 		result.Types = append(result.Types, pgx.Identifier{schema, name}.Sanitize())
 	}
-	return result, types.Err()
+	if err := types.Err(); err != nil {
+		return postgresResult{}, err
+	}
+	types.Close()
+	routines, err := conn.Query(ctx, `SELECT n.nspname, p.prokind::text,
+		p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')'
+		FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+		WHERE p.prokind IN ('f','p') AND n.nspname NOT IN ('pg_catalog','information_schema')
+		AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp_%'
+		AND pg_catalog.has_schema_privilege(n.oid,'USAGE')
+		ORDER BY n.nspname, p.proname, p.oid`)
+	if err != nil {
+		return postgresResult{}, err
+	}
+	defer routines.Close()
+	for routines.Next() {
+		var schema, kind, signature string
+		if err := routines.Scan(&schema, &kind, &signature); err != nil {
+			return postgresResult{}, err
+		}
+		index := slices.IndexFunc(result.Schemas, func(item postgresSchema) bool { return item.Name == schema })
+		if index < 0 {
+			continue
+		}
+		if kind == "p" {
+			result.Schemas[index].Procedures = append(result.Schemas[index].Procedures, signature)
+		}
+		if kind == "f" {
+			result.Schemas[index].Functions = append(result.Schemas[index].Functions, signature)
+		}
+	}
+	if err := routines.Err(); err != nil {
+		return postgresResult{}, err
+	}
+	routines.Close()
+	triggers, err := conn.Query(ctx, `SELECT n.nspname,c.relname,t.tgname FROM pg_catalog.pg_trigger t
+		JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid
+		JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+		WHERE NOT t.tgisinternal AND n.nspname NOT IN ('pg_catalog','information_schema')
+		AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp_%'
+		AND pg_catalog.has_schema_privilege(n.oid,'USAGE')
+		ORDER BY n.nspname,c.relname,t.tgname`)
+	if err != nil {
+		return postgresResult{}, err
+	}
+	defer triggers.Close()
+	for triggers.Next() {
+		var schema, table, name string
+		if err := triggers.Scan(&schema, &table, &name); err != nil {
+			return postgresResult{}, err
+		}
+		index := slices.IndexFunc(result.Schemas, func(item postgresSchema) bool { return item.Name == schema })
+		if index >= 0 {
+			result.Schemas[index].Triggers = append(result.Schemas[index].Triggers, schemaTrigger{Name: name, Table: table})
+		}
+	}
+	return result, triggers.Err()
 }
 
 func (a *application) handlePostgresDatabaseCatalog(w http.ResponseWriter, r *http.Request, actor user) {
@@ -285,6 +344,86 @@ func (a *application) handlePostgresDatabaseCatalog(w http.ResponseWriter, r *ht
 	result, err := readPostgresCatalog(ctx, conn)
 	result.Databases = database.databaseList()
 	writePostgresResult(w, result, err)
+}
+
+func (a *application) handlePostgresRoutine(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	database, schema, signature, kind := query.Get("database"), query.Get("schema"), query.Get("name"), query.Get("kind")
+	if !validSchemaName(database) || !validSchemaName(schema) || signature == "" || len(signature) > 4096 || strings.ContainsRune(signature, 0) || (kind != "function" && kind != "procedure") {
+		writeError(w, 400, "invalid_routine", "Choose a function or procedure.")
+		return
+	}
+	conn, ctx, cleanup := a.openPostgresConnection(w, r, database, postgresRequestTimeout)
+	if conn == nil {
+		return
+	}
+	defer cleanup()
+	code := "f"
+	if kind == "procedure" {
+		code = "p"
+	}
+	var definition, language, volatility string
+	var returns *string
+	var securityDefiner bool
+	err := conn.QueryRow(ctx, `SELECT pg_catalog.pg_get_functiondef(p.oid), l.lanname,
+		pg_catalog.pg_get_function_result(p.oid), p.provolatile::text, p.prosecdef
+		FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+		JOIN pg_catalog.pg_language l ON l.oid=p.prolang
+		WHERE n.nspname=$1 AND p.prokind=$2
+		AND p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')'=$3`, schema, code, signature).Scan(&definition, &language, &returns, &volatility, &securityDefiner)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, 404, "routine_not_found", "This routine no longer exists. Refresh the sidebar.")
+		return
+	}
+	if err != nil {
+		writePostgresResult(w, postgresResult{}, err)
+		return
+	}
+	metadata := map[string]string{"Language": language, "Security": "Invoker"}
+	if securityDefiner {
+		metadata["Security"] = "Definer"
+	}
+	if kind == "function" {
+		metadata["Returns"] = ""
+		if returns != nil {
+			metadata["Returns"] = *returns
+		}
+		metadata["Volatility"] = map[string]string{"i": "Immutable", "s": "Stable", "v": "Volatile"}[volatility]
+	}
+	writeJSON(w, 200, map[string]any{"definition": definition, "metadata": metadata})
+}
+
+func (a *application) handlePostgresTrigger(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		a.changePostgresTrigger(w, r)
+		return
+	}
+	query := r.URL.Query()
+	database, schema, table, name := query.Get("database"), query.Get("schema"), query.Get("table"), query.Get("name")
+	if !validSchemaName(database) || !validSchemaName(schema) || !validSchemaName(table) || !validSchemaName(name) {
+		writeError(w, 400, "invalid_trigger", "Choose a trigger.")
+		return
+	}
+	conn, ctx, cleanup := a.openPostgresConnection(w, r, database, postgresRequestTimeout)
+	if conn == nil {
+		return
+	}
+	defer cleanup()
+	var definition, enabled string
+	err := conn.QueryRow(ctx, `SELECT pg_catalog.pg_get_triggerdef(t.oid,true), t.tgenabled::text
+		FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid
+		JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+		WHERE n.nspname=$1 AND c.relname=$2 AND t.tgname=$3 AND NOT t.tgisinternal`, schema, table, name).Scan(&definition, &enabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, 404, "trigger_not_found", "This trigger no longer exists. Refresh the sidebar.")
+		return
+	}
+	if err != nil {
+		writePostgresResult(w, postgresResult{}, err)
+		return
+	}
+	status := map[string]string{"O": "Enabled", "D": "Disabled", "R": "Replica", "A": "Always"}[enabled]
+	writeJSON(w, 200, map[string]any{"definition": definition, "metadata": map[string]string{"Table": table, "Status": status}})
 }
 
 func (a *application) handlePostgresRows(w http.ResponseWriter, r *http.Request) {

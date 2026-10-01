@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -190,7 +191,13 @@ func TestMariaDBAPIIntegration(t *testing.T) {
 		{Name: "id", Type: "bigint", Primary: true, AutoIncrement: true},
 		{Name: "parent_id", Type: "bigint", Nullable: true},
 	}}), cookie, 200)
-	request(t, handler, "POST", base+"/constraints", marshal(map[string]any{"database": config.DBName, "table": child, "name": "parent_fk", "type": "FOREIGN KEY", "columns": []string{"parent_id"}, "referenceTable": table, "referenceColumns": []string{"id"}}), cookie, 200)
+	request(t, handler, "POST", base+"/constraints", marshal(map[string]any{"database": config.DBName, "table": child, "name": "parent_fk", "type": "FOREIGN KEY", "columns": []string{"parent_id"}, "referenceTable": table, "referenceColumns": []string{"id"}, "onUpdate": "CASCADE", "onDelete": "SET NULL"}), cookie, 200)
+	var childPage tablePage
+	if err := json.Unmarshal(request(t, handler, "GET", base+"/rows?database="+config.DBName+"&table="+child+"&page=1&pageSize=20", "", cookie, 200).Body.Bytes(), &childPage); err != nil || !slices.ContainsFunc(childPage.Constraints, func(item tableConstraint) bool {
+		return item.Name == "parent_fk" && item.OnUpdate == "CASCADE" && item.OnDelete == "SET NULL"
+	}) {
+		t.Fatalf("foreign key actions missing: %+v %v", childPage.Constraints, err)
+	}
 	request(t, handler, "DELETE", base+"/constraints", marshal(map[string]any{"database": config.DBName, "table": child, "name": "parent_fk"}), cookie, 200)
 	request(t, handler, "DELETE", base+"/tables", marshal(map[string]any{"database": config.DBName, "table": child}), cookie, 200)
 	request(t, handler, "DELETE", base+"/constraints", marshal(map[string]any{"database": config.DBName, "table": table, "name": "amount_nonnegative"}), cookie, 200)

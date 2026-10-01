@@ -1,5 +1,7 @@
 package main
 
+import "errors"
+
 // Bentuk data ini dipakai bersama oleh PostgreSQL, MySQL/MariaDB, dan SQLite.
 
 type tableColumn struct {
@@ -66,7 +68,15 @@ type tableConstraint struct {
 	ReferenceSchema  string   `json:"referenceSchema,omitempty"`
 	ReferenceTable   string   `json:"referenceTable,omitempty"`
 	ReferenceColumns []string `json:"referenceColumns"`
+	OnUpdate         string   `json:"onUpdate,omitempty"`
+	OnDelete         string   `json:"onDelete,omitempty"`
 	Expression       string   `json:"expression,omitempty"`
+	Triggers         []string `json:"triggers,omitempty"`
+}
+
+type schemaTrigger struct {
+	Name  string `json:"name"`
+	Table string `json:"table"`
 }
 
 type tableRowKey struct {
@@ -98,11 +108,35 @@ type schemaChange struct {
 	ReferenceSchema  string   `json:"referenceSchema"`
 	ReferenceTable   string   `json:"referenceTable"`
 	ReferenceColumns []string `json:"referenceColumns"`
+	OnUpdate         string   `json:"onUpdate"`
+	OnDelete         string   `json:"onDelete"`
 	Expression       string   `json:"expression"`
 	ValidateOnly     bool     `json:"validateOnly"`
 	PreviewOnly      bool     `json:"previewOnly,omitempty"`
 	RebuildName      string   `json:"rebuildName,omitempty"`
 	PreviewHash      string   `json:"previewHash,omitempty"`
+}
+
+func foreignKeyActions(input schemaChange, allowSetDefault bool) (string, error) {
+	for _, action := range []string{input.OnUpdate, input.OnDelete} {
+		switch action {
+		case "", "RESTRICT", "CASCADE", "NO ACTION", "SET NULL":
+		case "SET DEFAULT":
+			if !allowSetDefault {
+				return "", errors.New("SET DEFAULT is not supported by this database")
+			}
+		default:
+			return "", errors.New("choose a supported foreign key action")
+		}
+	}
+	statement := ""
+	if input.OnUpdate != "" {
+		statement += " ON UPDATE " + input.OnUpdate
+	}
+	if input.OnDelete != "" {
+		statement += " ON DELETE " + input.OnDelete
+	}
+	return statement, nil
 }
 
 type tableColumnInput struct {

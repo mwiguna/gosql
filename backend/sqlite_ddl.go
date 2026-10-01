@@ -512,6 +512,11 @@ func (a *application) handleSQLiteConstraint(w http.ResponseWriter, r *http.Requ
 		}
 		clause += "CHECK (" + input.Expression + ")"
 	case "FOREIGN KEY":
+		actions, actionErr := foreignKeyActions(input, true)
+		if actionErr != nil {
+			writeError(w, 400, "invalid_foreign_key_action", actionErr.Error())
+			return
+		}
 		if input.ReferenceSchema != "" || !sqlitedb.ValidName(input.ReferenceTable) || len(input.ReferenceColumns) != len(input.Columns) {
 			writeError(w, 400, "invalid_reference", "Choose matching referenced columns in this database.")
 			return
@@ -551,7 +556,7 @@ func (a *application) handleSQLiteConstraint(w http.ResponseWriter, r *http.Requ
 			writeError(w, 400, "invalid_reference", "Referenced columns must form a primary or unique key.")
 			return
 		}
-		clause += "FOREIGN KEY (" + strings.Join(selected, ", ") + ") REFERENCES " + sqlitedb.Quote(input.ReferenceTable) + " (" + strings.Join(references, ", ") + ")"
+		clause += "FOREIGN KEY (" + strings.Join(selected, ", ") + ") REFERENCES " + sqlitedb.Quote(input.ReferenceTable) + " (" + strings.Join(references, ", ") + ")" + actions
 	default:
 		writeError(w, 400, "invalid_constraint", "Choose UNIQUE, CHECK, FOREIGN KEY, or PRIMARY KEY.")
 		return

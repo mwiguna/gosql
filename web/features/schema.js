@@ -47,12 +47,16 @@ export function renderStructure(tab, area) {
     : mode === "Indexes" ? ["Name", "Definition", "Unique"] : ["Name", "Definition", "Type"];
   const values = mode === "Structure" ? tab.schema : mode === "Indexes" ? tab.indexes : tab.constraints;
   const kind = mode === "Structure" ? "column" : mode === "Indexes" ? "index" : "constraint";
+  const catalog = getConnectionCatalog(tab.connectionId, tab.db);
+  const triggers = mode === "Constraints" ? (sqlite(tab) || mysql(tab) ? catalog?.triggers : catalog?.schemas?.find(schema => schema.name === tab.schemaName)?.triggers)?.filter(trigger => trigger.table === tab.table) || [] : [];
   const actions = (mode !== "Structure" || !tab.isView) && !protectedDatabase && !tab.sqliteVirtual;
   const rows = values.map((value, index) => {
     const cells = mode === "Structure"
       ? [escapeHtml(value.name) + (value.generated ? `<small> · ${escapeHtml(value.generated)} generated</small>` : value.hidden ? "<small> · hidden</small>" : ""), `<code>${escapeHtml(value.type)}</code>${sqlite(tab) ? `<small> · ${escapeHtml(value.affinity)} affinity</small>` : ""}`, value.nullable ? "Yes" : "No", `<code>${escapeHtml(value.default)}</code>${value.defaultSource ? `<small> · ${escapeHtml(value.defaultSource)}</small>` : ""}`, value.key === "PRIMARY KEY" ? icon("key") + ` Primary${value.primaryOrder ? ` #${value.primaryOrder}` : ""}` : escapeHtml(value.key)]
       : mode === "Indexes" ? [escapeHtml(value.name), `<code>${escapeHtml(value.definition)}</code>`, value.unique ? "Yes" : "No"]
-        : [escapeHtml(value.name), `<code>${escapeHtml(value.definition)}</code>`, escapeHtml(value.type) + (value.validated === false ? " · Not validated" : "")];
+        : [escapeHtml(value.name), `<code>${escapeHtml(value.definition)}</code>${value.type === "FOREIGN KEY" ? value.triggers?.length
+          ? `<details class="constraint-triggers"><summary>FK triggers (${value.triggers.length})</summary>${value.triggers.map(definition => `<pre class="sql-preview">${escapeHtml(definition)}</pre>`).join("")}</details>`
+          : '<small class="constraint-triggers">FK enforcement is managed internally by the database.</small>' : ""}`, escapeHtml(value.type) + (value.validated === false ? " · Not validated" : "")];
     const editable = actions && !tab.isView && (mode === "Structure" ? !sqlite(tab) || value.key !== "ROWID" && value.key !== "PRIMARY KEY"
       : mode === "Indexes" ? value.editable && !value.managed && !value.primary : !sqlite(tab) && ["UNIQUE", "FOREIGN KEY", "CHECK", "PRIMARY KEY"].includes(value.type));
     const canEditDefinition = !((mysql(tab) || sqlite(tab)) && mode === "Structure") || value.definitionEditable;
@@ -69,6 +73,7 @@ export function renderStructure(tab, area) {
     <p class="hint" style="margin-top:5px">${mode === "Structure" ? "Columns and data types for " + escapeHtml(tab.table) + (sqlite(tab) ? ` · ${tab.sqliteStrict ? "STRICT · " : ""}${tab.sqliteWithoutRowid ? "WITHOUT ROWID" : "rowid"}. SQLite affinity does not enforce a length limit.` : "") : mode === "Indexes" ? "Standard and unique indexes, including indexes managed by constraints." : "Rules that keep table data consistent."}</p></div>
     <span class="spacer"></span>${tab.isView || protectedDatabase || tab.sqliteVirtual ? "" : add}</div>
     <div class="schema-scroll"><table class="schema-table"><thead><tr>${fields.map(field => `<th>${field}</th>`).join("")}${actions ? "<th></th>" : ""}</tr></thead><tbody>${rows}</tbody></table></div>
+    ${mode === "Constraints" && triggers.length ? `<details class="table-triggers"><summary>Triggers on ${escapeHtml(tab.table)} (${triggers.length})</summary><div class="stack">${triggers.map(trigger => button("inspect-object", trigger.name, "", "", `data-id="${escapeHtml(tab.connectionId)}" data-db="${escapeHtml(tab.db)}" data-schema="${escapeHtml(tab.schemaName)}" data-table="${escapeHtml(tab.table)}" data-name="${escapeHtml(trigger.name)}" data-kind="Triggers"`)).join("")}</div></details>` : ""}
     ${sqlite(tab) && mode === "Structure" && tab.sqliteDDL ? `<details><summary>SQLite definition</summary><pre class="sql-preview">${escapeHtml(tab.sqliteDDL)}</pre></details>` : ""}
     <div class="metadata-foot"><span>DATABASE<strong>${escapeHtml(tab.db)}</strong></span><span>ENGINE<strong>${escapeHtml(getConnectionById(tab.connectionId).engine)}</strong></span><span>ROWS ON PAGE<strong>${tab.rows.length}</strong></span></div>`;
 }
@@ -100,7 +105,7 @@ function foreignKeyPicker(tab, existing, pairs) {
     ? (catalog?.tables || []).map(table => ({ schema: "", table }))
     : (catalog?.schemas || []).flatMap(schema => schema.tables.map(table => ({ schema: schema.name, table })));
   const selector = findElement("#reference-table");
-  selector.innerHTML = '<option value="">Choose a table…</option>' + references.map((item, index) => `<option value="${index}" ${item.schema === existing?.referenceSchema && item.table === existing?.referenceTable ? "selected" : ""}>${escapeHtml(item.schema)}.${escapeHtml(item.table)}</option>`).join("");
+  selector.innerHTML = '<option value="">Choose a table…</option>' + references.map((item, index) => `<option value="${index}" ${item.table === existing?.referenceTable && (mysql(tab) || item.schema === existing?.referenceSchema) ? "selected" : ""}>${escapeHtml(item.schema ? item.schema + "." : "")}${escapeHtml(item.table)}</option>`).join("");
   let referenceColumns = [];
   const pairFieldset = findElement("#foreign-key-pair-fieldset");
   const drawPairs = () => {
@@ -138,16 +143,17 @@ function foreignKeyPicker(tab, existing, pairs) {
 export function changeSQL(tab, kind, value) {
   const q = name => quoted(tab, name);
   const columns = value.columns.map(q).join(", ");
+  const actions = value.type === "FOREIGN KEY" ? `${value.onUpdate ? " ON UPDATE " + value.onUpdate : ""}${value.onDelete ? " ON DELETE " + value.onDelete : ""}` : "";
   if (mysql(tab)) {
     if (kind === "index") return `ALTER TABLE ${tableName(tab)} ADD ${value.unique ? "UNIQUE " : ""}INDEX ${q(value.name)} (${columns});`;
-    if (value.type === "FOREIGN KEY") return `ALTER TABLE ${tableName(tab)} ADD CONSTRAINT ${q(value.name)} FOREIGN KEY (${columns}) REFERENCES ${q(tab.db)}.${q(value.referenceTable)} (${value.referenceColumns.map(q).join(", ")});`;
+    if (value.type === "FOREIGN KEY") return `ALTER TABLE ${tableName(tab)} ADD CONSTRAINT ${q(value.name)} FOREIGN KEY (${columns}) REFERENCES ${q(tab.db)}.${q(value.referenceTable)} (${value.referenceColumns.map(q).join(", ")})${actions};`;
     if (value.type === "PRIMARY KEY") return `ALTER TABLE ${tableName(tab)} ADD PRIMARY KEY (${columns});`;
     if (value.type === "CHECK") return `ALTER TABLE ${tableName(tab)} ADD CONSTRAINT ${q(value.name)} CHECK (${value.expression});`;
     return `ALTER TABLE ${tableName(tab)} ADD CONSTRAINT ${q(value.name)} UNIQUE (${columns});`;
   }
   if (kind === "index") return `CREATE ${value.unique ? "UNIQUE " : ""}INDEX ${q(value.name)} ON ${tableName(tab)} USING btree (${columns});`;
   let definition = value.type === "CHECK" ? `CHECK (${value.expression})` : `${value.type} (${columns})`;
-  if (value.type === "FOREIGN KEY") definition += ` REFERENCES ${q(value.referenceSchema)}.${q(value.referenceTable)} (${value.referenceColumns.map(q).join(", ")})`;
+  if (value.type === "FOREIGN KEY") definition += ` REFERENCES ${q(value.referenceSchema)}.${q(value.referenceTable)} (${value.referenceColumns.map(q).join(", ")})${actions}`;
   const add = `ALTER TABLE ${tableName(tab)} ADD CONSTRAINT ${q(value.name)} ${definition}`;
   return value.type === "FOREIGN KEY" ? `${add} NOT VALID;\nALTER TABLE ${tableName(tab)} VALIDATE CONSTRAINT ${q(value.name)};` : add + ";";
 }
@@ -172,10 +178,12 @@ function openSchemaForm(tab, kind, existing) {
   const pairs = existing?.type === "FOREIGN KEY" && existing.columns.length ? existing.columns.map((local, index) => ({ local, foreign: existing.referenceColumns[index] || "" })) : [{ local: "", foreign: "" }];
   const editing = Boolean(existing);
   const typeOptions = ["UNIQUE", "FOREIGN KEY", "CHECK", "PRIMARY KEY"].map(type => `<option ${existing?.type === type ? "selected" : ""}>${type}</option>`).join("");
+  const fkActions = ["NO ACTION", "RESTRICT", "CASCADE", "SET NULL", ...(mysql(tab) ? [] : ["SET DEFAULT"])];
+  const actionOptions = selected => fkActions.map(action => `<option ${action === (selected || "NO ACTION") ? "selected" : ""}>${action}</option>`).join("");
   showDialog(`${editing ? "Edit" : "Add"} ${kind}`, `<form id="schema-form" class="stack">${mysql(tab) ? '<p class="hint">DDL commits immediately and can wait for a metadata lock. Foreign keys can be added here only when the table is empty.</p>' : ""}<label>Name<input name="name" ${mysql(tab) && existing?.type === "PRIMARY KEY" ? "" : "required"} maxlength="64" value="${escapeHtml(existing?.name || "")}" placeholder="${escapeHtml(tab.table)}_${kind}"></label>
     ${kind === "index" ? `<label>Index Mode<select name="indexMode"><option value="standard" ${!existing?.unique ? "selected" : ""}>Standard Index</option><option value="unique" ${existing?.unique ? "selected" : ""}>Unique Index</option></select></label>` : `<label>Constraint Type<select name="type" id="constraint-type" ${mysql(tab) && editing ? "disabled" : ""}>${typeOptions}</select></label>`}
     <fieldset class="column-picker" id="local-columns"><legend>Columns · ${escapeHtml(tab.db)}.${escapeHtml(tab.table)}</legend><div class="column-options" id="schema-columns-options"></div><div class="column-order" id="schema-columns-order"></div></fieldset>
-    ${kind === "constraint" ? `<section id="foreign-key-fields" class="stack" hidden><label>Reference Table · ${escapeHtml(tab.db)}<select id="reference-table"></select></label><fieldset class="column-picker" id="foreign-key-pair-fieldset" disabled><legend>Column Pairs</legend><div id="foreign-key-pairs" class="stack"></div></fieldset><p class="hint">Referenced columns must form a primary or unique key.</p></section><label id="check-expression-field" hidden>Check Expression<textarea name="expression" rows="3" placeholder="e.g. price >= 0">${escapeHtml(existing?.expression || "")}</textarea></label>` : ""}
+    ${kind === "constraint" ? `<section id="foreign-key-fields" class="stack" hidden><label>Reference Table · ${escapeHtml(tab.db)}<select id="reference-table"></select></label><fieldset class="column-picker" id="foreign-key-pair-fieldset" disabled><legend>Column Pairs</legend><div id="foreign-key-pairs" class="stack"></div></fieldset><div class="form-grid"><label>ON UPDATE<select name="onUpdate">${actionOptions(existing?.onUpdate)}</select></label><label>ON DELETE<select name="onDelete">${actionOptions(existing?.onDelete)}</select></label></div><p class="hint">Referenced columns must form a primary or unique key. SET NULL requires nullable columns${mysql(tab) ? "." : "; SET DEFAULT requires a valid default."}</p></section><label id="check-expression-field" hidden>Check Expression<textarea name="expression" rows="3" placeholder="e.g. price >= 0">${escapeHtml(existing?.expression || "")}</textarea></label>` : ""}
     <div id="schema-error" class="error-text" role="alert"></div><button type="submit" class="primary">Review SQL</button></form>`, "", true);
   columnPicker(tab, selected);
   const reference = kind === "constraint" ? foreignKeyPicker(tab, existing, pairs) : null;
@@ -205,6 +213,8 @@ function openSchemaForm(tab, kind, existing) {
       value.referenceSchema = ref.schema;
       value.referenceTable = ref.table;
       value.referenceColumns = pairs.map(pair => pair.foreign);
+      value.onUpdate = form.get("onUpdate");
+      value.onDelete = form.get("onDelete");
     }
     if (type === "CHECK" && !value.expression) return findElement("#schema-error").textContent = "Enter a CHECK expression.";
     if (sqlite(tab)) {
@@ -275,7 +285,7 @@ function openColumnForm(tab, existing) {
   showDialog(editing ? "Edit column" : "Add column", `<form id="column-form" class="stack">
     <p class="hint">${escapeHtml(tab.schemaName)}.${escapeHtml(tab.table)}${editing ? " · " + escapeHtml(existing.type) : ""}</p>
     <label>Column name<input name="name" required maxlength="63" value="${escapeHtml(existing?.name || "")}"></label>
-    <label>Type<select name="type">${editing ? `<option value="">Keep current type (${escapeHtml(existing.type)})</option>` : ""}${availableTypes.filter(type => !editing || !["smallserial", "serial", "bigserial"].includes(type)).map(type => `<option value="${escapeHtml(type)}" ${!editing && type === "text" ? "selected" : ""}>${escapeHtml(type)}</option>`).join("")}</select></label>
+    <div class="column-type-field"><span>Type</span><button type="button" id="column-type-trigger" aria-label="Type" aria-controls="column-type-options" aria-expanded="false"><span></span>${icon("down")}</button><select name="type" id="column-type-options" size="8" aria-label="Type" hidden>${editing ? `<option value="">Keep current type (${escapeHtml(existing.type)})</option>` : ""}${availableTypes.filter(type => !editing || !["smallserial", "serial", "bigserial"].includes(type)).map(type => `<option value="${escapeHtml(type)}" ${!editing && type === "text" ? "selected" : ""}>${escapeHtml(type)}</option>`).join("")}</select></div>
     <label id="column-length-field" hidden>Length<input name="length" type="number" min="1" max="10485760" value="${oldLength}"></label>
     <label id="column-precision-field" hidden>Precision (digits)<input name="precision" type="number" min="1" max="1000" value="${oldPrecision}"></label>
     <label id="column-scale-field" hidden>Scale (decimals)<input name="scale" type="number" min="-1000" max="1000" value="${oldScale}"></label>
@@ -287,6 +297,27 @@ function openColumnForm(tab, existing) {
     <button type="submit" class="primary">${editing ? "Save column" : "Add column"}</button>
   </form>`);
   const form = findElement("#column-form");
+  const typeSelect = form.elements.type;
+  const typeTrigger = findElement("#column-type-trigger", form);
+  const closeTypeOptions = () => {
+    typeSelect.hidden = true;
+    typeTrigger.setAttribute("aria-expanded", "false");
+  };
+  typeTrigger.firstElementChild.textContent = typeSelect.selectedOptions[0]?.textContent || "";
+  typeTrigger.onclick = () => {
+    if (!typeSelect.hidden) { closeTypeOptions(); return; }
+    typeSelect.hidden = false;
+    typeTrigger.setAttribute("aria-expanded", "true");
+    typeSelect.focus();
+  };
+  typeSelect.onblur = () => { if (document.activeElement !== typeTrigger) closeTypeOptions(); };
+  typeSelect.onpointerup = () => { closeTypeOptions(); typeTrigger.focus(); };
+  typeSelect.onkeydown = event => {
+    if (event.key !== "Escape" && event.key !== "Enter") return;
+    event.preventDefault();
+    closeTypeOptions();
+    typeTrigger.focus();
+  };
   let defaultDirty = false;
   let modifierDirty = false;
   for (const name of ["length", "precision", "scale"]) form.elements.namedItem(name).oninput = () => { modifierDirty = true; };
@@ -304,7 +335,10 @@ function openColumnForm(tab, existing) {
     array.disabled = ["smallserial", "serial", "bigserial"].includes(base);
     if (array.disabled) array.checked = false;
   };
-  form.elements.type.onchange = updateModifiers;
+  typeSelect.onchange = () => {
+    typeTrigger.firstElementChild.textContent = typeSelect.selectedOptions[0]?.textContent || "";
+    updateModifiers();
+  };
   updateModifiers();
   form.onsubmit = async event => {
     event.preventDefault();

@@ -208,13 +208,13 @@ func TestPostgresIntegration(t *testing.T) {
 		t.Fatal("primary key was not reflected in metadata")
 	}
 	request(t, handler, "DELETE", path+"/constraints", string(primaryJSON), cookie, 200)
-	foreign := map[string]any{"database": fields.Database, "schema": schema, "table": "children", "name": "children_parent_fkey", "type": "FOREIGN KEY", "columns": []string{"parent_id"}, "referenceSchema": schema, "referenceTable": "parents", "referenceColumns": []string{"id"}}
+	foreign := map[string]any{"database": fields.Database, "schema": schema, "table": "children", "name": "children_parent_fkey", "type": "FOREIGN KEY", "columns": []string{"parent_id"}, "referenceSchema": schema, "referenceTable": "parents", "referenceColumns": []string{"id"}, "onUpdate": "CASCADE", "onDelete": "SET NULL"}
 	foreignJSON, _ := json.Marshal(foreign)
 	request(t, handler, "POST", path+"/constraints", string(foreignJSON), cookie, 200)
 	var children tablePage
 	json.Unmarshal(read("children", "1", "20", 200).Body.Bytes(), &children)
 	if !slices.ContainsFunc(children.Constraints, func(item tableConstraint) bool {
-		return item.Type == "FOREIGN KEY" && item.Validated && item.ReferenceTable == "parents" && slices.Equal(item.ReferenceColumns, []string{"id"})
+		return item.Type == "FOREIGN KEY" && item.Validated && item.ReferenceTable == "parents" && slices.Equal(item.ReferenceColumns, []string{"id"}) && item.OnUpdate == "CASCADE" && item.OnDelete == "SET NULL" && len(item.Triggers) > 0
 	}) {
 		t.Fatal("foreign key metadata is incomplete")
 	}

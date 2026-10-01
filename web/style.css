@@ -643,7 +643,7 @@ p {
   background: #f8fafd;
   border-bottom: 1px solid var(--line);
   padding-left: 6px;
-  padding-bottom: 3px;
+  padding-bottom: 2px;
   overflow-x: auto;
 }
 .workspace-tab {
@@ -1335,6 +1335,23 @@ p {
   font-size: 11px;
   color: #748197;
 }
+.constraint-triggers {
+  display: block;
+  max-width: 520px;
+  margin-top: 7px;
+  white-space: normal;
+}
+.constraint-triggers .sql-preview {
+  margin-top: 7px;
+}
+.table-triggers {
+  margin-top: 12px;
+}
+.table-triggers .stack {
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 9px;
+}
 .schema-table button {
   min-height: 25px;
   height: 25px;
@@ -1437,6 +1454,22 @@ input[type=file] {
 .form-grid input[type=checkbox] {
   width: 15px;
   flex-shrink: 0;
+}
+.column-type-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 550;
+}
+.column-type-field button {
+  justify-content: space-between;
+  padding: 9px 11px;
+  font-weight: 400;
+  text-transform: none;
+}
+.column-type-field select {
+  width: 100%;
 }
 
 /* --------------------------------------------------------------------------
@@ -1735,7 +1768,17 @@ input[type=file] {
   gap: 8px;
   font-weight: 400;
 }
+.tree-group > summary > button {
+  min-height: 22px;
+  height: 22px;
+  padding: 3px;
+}
+dialog input[name="default"]:disabled {
+  background: #f4f6fa;
+  color: #8f99ac;
+}
 .sql-preview {
+  margin: 0;
   padding: 15px;
   border: 1px solid var(--line);
   border-radius: 5px;

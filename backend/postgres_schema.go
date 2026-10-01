@@ -222,7 +222,11 @@ func buildConstraintSQL(input schemaChange, columns, reference []tableColumn) (s
 		if err != nil {
 			return "", err
 		}
-		return "ALTER TABLE " + table + " ADD CONSTRAINT " + name + " FOREIGN KEY (" + local + ") REFERENCES " + pgx.Identifier{input.ReferenceSchema, input.ReferenceTable}.Sanitize() + " (" + foreign + ")", nil
+		actions, err := foreignKeyActions(input, true)
+		if err != nil {
+			return "", err
+		}
+		return "ALTER TABLE " + table + " ADD CONSTRAINT " + name + " FOREIGN KEY (" + local + ") REFERENCES " + pgx.Identifier{input.ReferenceSchema, input.ReferenceTable}.Sanitize() + " (" + foreign + ")" + actions, nil
 	case "CHECK":
 		expression := strings.TrimSpace(input.Expression)
 		if expression == "" || len(expression) > 2000 || strings.ContainsRune(expression, 0) || !safeCheckExpression(expression) {

@@ -157,7 +157,7 @@ function renderRemoteData(tab) {
       grid = new Tabulator(findElement("#table-wrap").firstElementChild, {
         height: "100%", layout: "fitData", index: "_row", nestedFieldSeparator: false, editTriggerEvent: "dblclick",
         data, placeholder: "No rows on this page.", rowHeight: 36,
-        columnDefaults: { resizable: true, headerSort: false, minWidth: 100 },
+        columnDefaults: { resizable: true, minWidth: 100 },
         selectableRows: tab.editable,
         selectableRowsCheck: row => Boolean(tab.versions[row.getData()._row]),
         columns: [ ...(tab.editable ? [{ title: "", field: "_select", formatter: "rowSelection", titleFormatter: "rowSelection", width: 42, minWidth: 42, resizable: false, cellClick: (event, cell) => cell.getRow().toggleSelect() }] : []),
@@ -364,7 +364,7 @@ function mountGrid() {
     const columns = [{
       title: "", field: "_select", formatter: "rowSelection",
       titleFormatter: "rowSelection", hozAlign: "center",
-      headerSort: false, width: 42, minWidth: 42, resizable: false,
+      width: 42, minWidth: 42, resizable: false,
       cellClick: (event, cell) => cell.getRow().toggleSelect()
     }, ...fields.map((field) => ({
       title: field, field,
@@ -384,7 +384,7 @@ function mountGrid() {
       index: "id", layout: "fitColumns",
       placeholder: "No rows match your search or filters.",
       rowHeight: 36, editTriggerEvent: "dblclick", selectableRows: true,
-      columnDefaults: { resizable: true, headerSort: false, minWidth: 100 },
+      columnDefaults: { resizable: true, minWidth: 100 },
       columns
     });
     const mountedGrid = grid;

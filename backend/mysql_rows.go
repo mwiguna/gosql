@@ -213,16 +213,20 @@ func readMySQLMeta(ctx context.Context, conn *sql.Conn, database, table string) 
 	}
 	for i := range meta.Constraints {
 		item := &meta.Constraints[i]
-		rows, err = conn.QueryContext(ctx, `SELECT COALESCE(COLUMN_NAME,''),COALESCE(REFERENCED_TABLE_SCHEMA,''),COALESCE(REFERENCED_TABLE_NAME,''),COALESCE(REFERENCED_COLUMN_NAME,'')
-			FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND CONSTRAINT_NAME=? ORDER BY ORDINAL_POSITION`, database, table, item.Name)
+		rows, err = conn.QueryContext(ctx, `SELECT COALESCE(k.COLUMN_NAME,''),COALESCE(k.REFERENCED_TABLE_SCHEMA,''),COALESCE(k.REFERENCED_TABLE_NAME,''),COALESCE(k.REFERENCED_COLUMN_NAME,''),
+			COALESCE(r.UPDATE_RULE,''),COALESCE(r.DELETE_RULE,'')
+			FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+			LEFT JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA=k.CONSTRAINT_SCHEMA AND r.TABLE_NAME=k.TABLE_NAME AND r.CONSTRAINT_NAME=k.CONSTRAINT_NAME
+			WHERE k.TABLE_SCHEMA=? AND k.TABLE_NAME=? AND k.CONSTRAINT_NAME=? ORDER BY k.ORDINAL_POSITION`, database, table, item.Name)
 		if err != nil {
 			return meta, err
 		}
 		for rows.Next() {
-			var column, refDB, refTable, refColumn string
-			if err = rows.Scan(&column, &refDB, &refTable, &refColumn); err != nil {
+			var column, refDB, refTable, refColumn, onUpdate, onDelete string
+			if err = rows.Scan(&column, &refDB, &refTable, &refColumn, &onUpdate, &onDelete); err != nil {
 				break
 			}
+			item.OnUpdate, item.OnDelete = onUpdate, onDelete
 			if column != "" {
 				item.Columns = append(item.Columns, column)
 			}
@@ -246,6 +250,12 @@ func readMySQLMeta(ctx context.Context, conn *sql.Conn, database, table string) 
 		}
 		if item.Type == "FOREIGN KEY" {
 			item.Definition += " REFERENCES " + item.ReferenceSchema + "." + item.ReferenceTable + " (" + strings.Join(item.ReferenceColumns, ", ") + ")"
+			if item.OnUpdate != "" {
+				item.Definition += " ON UPDATE " + item.OnUpdate
+			}
+			if item.OnDelete != "" {
+				item.Definition += " ON DELETE " + item.OnDelete
+			}
 		}
 	}
 	for i := range meta.Indexes {

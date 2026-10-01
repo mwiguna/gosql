@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openQueryTab, openTable, readTableLocation, tableLocation } from "../features/workspace.js";
 import { state } from "../state.js";
-import { bindConnectionSearch, getConnectionSearch, resetConnectionTree } from "../features/connections.js";
+import { bindConnectionSearch, getConnectionSearch, resetConnectionTree, objectSQLTemplate } from "../features/connections.js";
 
 test("connection search is cleared when a workspace starts", context => {
   const input = {};
@@ -38,6 +38,18 @@ test("empty links show the welcome screen and incomplete links are rejected", ()
   assert.throws(() => readTableLocation("#connection=pg"), /incomplete or invalid/);
   assert.throws(() => readTableLocation("#database=shop"), /incomplete or invalid/);
   assert.throws(() => readTableLocation("#connection=pg&database=shop&view=Unknown"), /incomplete or invalid/);
+});
+
+test("object templates use the selected schema or database and a single SQL statement", () => {
+  assert.equal(objectSQLTemplate("PostgreSQL", "shop", 'my"schema', "view"), 'CREATE VIEW "my""schema"."new_view" AS\nSELECT 1 AS id;');
+  assert.match(objectSQLTemplate("PostgreSQL", "shop", 'my"schema', "function"), /^CREATE FUNCTION "my""schema"\."new_function"\(\)\nRETURNS integer/);
+  assert.match(objectSQLTemplate("PostgreSQL", "shop", "public", "procedure"), /^CREATE PROCEDURE "public"\."new_procedure"\(\)\nLANGUAGE sql/);
+  for (const engine of ["MySQL", "MariaDB"]) {
+    assert.equal(objectSQLTemplate(engine, "shop`db", "", "view"), 'CREATE VIEW `shop``db`.`new_view` AS\nSELECT 1 AS id;');
+    assert.match(objectSQLTemplate(engine, "shop`db", "", "function"), /^CREATE FUNCTION `shop``db`\.`new_function`\(\)\nRETURNS INT/);
+    assert.match(objectSQLTemplate(engine, "shop", "", "procedure"), /^CREATE PROCEDURE `shop`\.`new_procedure`\(\)\nSELECT 1;/);
+  }
+  assert.equal(objectSQLTemplate("SQLite", "local", "", "view"), 'CREATE VIEW main."new_view" AS\nSELECT 1 AS id;');
 });
 
 test("opening a query at the tab limit leaves the active table unchanged", context => {

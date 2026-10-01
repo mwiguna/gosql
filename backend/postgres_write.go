@@ -93,7 +93,11 @@ func readPostgresTableMeta(ctx context.Context, conn *pgx.Conn, schema, table st
 		coalesce(rn.nspname,''), coalesce(rc.relname,''),
 		ARRAY(SELECT a.attname::text FROM unnest(con.confkey) WITH ORDINALITY k(attnum,pos)
 		JOIN pg_catalog.pg_attribute a ON a.attrelid=con.confrelid AND a.attnum=k.attnum ORDER BY k.pos),
-		coalesce(pg_catalog.pg_get_expr(con.conbin,con.conrelid),''), con.convalidated
+		coalesce(pg_catalog.pg_get_expr(con.conbin,con.conrelid),''), con.convalidated,
+		CASE con.confupdtype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' ELSE '' END,
+		CASE con.confdeltype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' ELSE '' END,
+		ARRAY(SELECT pg_catalog.pg_get_triggerdef(t.oid,true) FROM pg_catalog.pg_trigger t
+			WHERE t.tgconstraint=con.oid ORDER BY t.tgname)
 		FROM pg_catalog.pg_constraint con
 		LEFT JOIN pg_catalog.pg_class rc ON rc.oid=con.confrelid
 		LEFT JOIN pg_catalog.pg_namespace rn ON rn.oid=rc.relnamespace
@@ -104,7 +108,7 @@ func readPostgresTableMeta(ctx context.Context, conn *pgx.Conn, schema, table st
 	for rows.Next() {
 		var item tableConstraint
 		var kind string
-		if err = rows.Scan(&item.Name, &kind, &item.Definition, &item.Columns, &item.ReferenceSchema, &item.ReferenceTable, &item.ReferenceColumns, &item.Expression, &item.Validated); err != nil {
+		if err = rows.Scan(&item.Name, &kind, &item.Definition, &item.Columns, &item.ReferenceSchema, &item.ReferenceTable, &item.ReferenceColumns, &item.Expression, &item.Validated, &item.OnUpdate, &item.OnDelete, &item.Triggers); err != nil {
 			break
 		}
 		item.Type = map[string]string{"p": "PRIMARY KEY", "u": "UNIQUE", "f": "FOREIGN KEY", "c": "CHECK", "x": "EXCLUDE"}[kind]

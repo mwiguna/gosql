@@ -76,6 +76,21 @@ func TestSQLiteMetadataAndRowVersion(t *testing.T) {
 	}
 }
 
+func TestSingleSQLiteTriggerStatement(t *testing.T) {
+	valid := `CREATE
+	TRIGGER audit AFTER INSERT ON items BEGIN
+		-- A semicolon inside a string is part of the trigger body.
+		INSERT INTO log(message) VALUES ('before;after');
+		SELECT CASE WHEN NEW.id > 0 THEN 1 ELSE 0 END;
+	END;`
+	if !singleSQLiteTrigger(valid) {
+		t.Fatal("valid trigger body was rejected")
+	}
+	if singleSQLiteTrigger(valid + " DELETE FROM items;") {
+		t.Fatal("second SQL statement was accepted")
+	}
+}
+
 func TestSQLiteLocalConnectionFlow(t *testing.T) {
 	_, h := testApplication(t)
 	cookie, _ := setupAdmin(t, h)
@@ -85,6 +100,7 @@ func TestSQLiteLocalConnectionFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = db.Exec(`CREATE TABLE "items" ("id" INTEGER PRIMARY KEY,"name" TEXT NOT NULL); INSERT INTO items(name) VALUES ('first');
+		CREATE TRIGGER items_touch AFTER UPDATE ON items BEGIN SELECT NEW.name; END;
 		CREATE TABLE "wr" ("code" TEXT,"seq" INTEGER,"value" TEXT,PRIMARY KEY("code","seq")) WITHOUT ROWID, STRICT;
 		INSERT INTO wr(code,seq,value) VALUES ('A',9223372036854775807,'original')`); err != nil {
 		t.Fatal(err)
@@ -98,7 +114,27 @@ func TestSQLiteLocalConnectionFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := "/api/connections/" + profile.ID
-	request(t, h, "POST", base+"/catalog", `{"password":""}`, cookie, 200)
+	w = request(t, h, "POST", base+"/catalog", `{"password":""}`, cookie, 200)
+	var catalog sqliteCatalog
+	if err = json.Unmarshal(w.Body.Bytes(), &catalog); err != nil || len(catalog.Triggers) != 1 || catalog.Triggers[0].Name != "items_touch" || catalog.Triggers[0].Table != "items" {
+		t.Fatalf("trigger catalog: %+v %v", catalog.Triggers, err)
+	}
+	w = request(t, h, "GET", base+"/triggers?database=flow&table=items&name=items_touch", "", cookie, 200)
+	if !strings.Contains(w.Body.String(), "CREATE TRIGGER items_touch") {
+		t.Fatalf("trigger definition: %s", w.Body.String())
+	}
+	trigger := triggerChange{Database: "flow", Table: "items", Name: "items_insert", Definition: `CREATE TRIGGER "items_insert" AFTER INSERT ON main."items" FOR EACH ROW BEGIN SELECT NEW.name; END;`}
+	request(t, h, "POST", base+"/triggers", queryBody(t, trigger), cookie, 200)
+	trigger.Definition = `CREATE TRIGGER "items_insert" BEFORE INSERT ON "items" FOR EACH ROW BEGIN SELECT NEW.name; END;`
+	request(t, h, "PATCH", base+"/triggers", queryBody(t, trigger), cookie, 200)
+	w = request(t, h, "GET", base+"/triggers?database=flow&table=items&name=items_insert", "", cookie, 200)
+	if !strings.Contains(w.Body.String(), "BEFORE INSERT") {
+		t.Fatalf("updated trigger: %s", w.Body.String())
+	}
+	trigger.Definition = `CREATE TRIGGER "items_insert" AFTER INSERT ON "items" BEGIN SELECT NEW.name; END; DELETE FROM items;`
+	request(t, h, "PATCH", base+"/triggers", queryBody(t, trigger), cookie, 400)
+	request(t, h, "DELETE", base+"/triggers", queryBody(t, trigger), cookie, 200)
+	request(t, h, "GET", base+"/triggers?database=flow&table=items&name=items_insert", "", cookie, 404)
 	w = request(t, h, "GET", base+"/rows?database=flow&schema=&table=items&page=1&pageSize=20", "", cookie, 200)
 	var page tablePage
 	if err = json.Unmarshal(w.Body.Bytes(), &page); err != nil {
@@ -206,7 +242,7 @@ func TestSQLiteAddConstraintsWithRebuild(t *testing.T) {
 	changes := []schemaChange{
 		{Database: "constraints", Table: "child", Name: "child_score_check", Type: "CHECK", Expression: "score >= 0"},
 		{Database: "constraints", Table: "child", Name: "child_code_unique", Type: "UNIQUE", Columns: []string{"code"}},
-		{Database: "constraints", Table: "child", Name: "child_parent_fk", Type: "FOREIGN KEY", Columns: []string{"parent_id"}, ReferenceTable: "parent", ReferenceColumns: []string{"id"}},
+		{Database: "constraints", Table: "child", Name: "child_parent_fk", Type: "FOREIGN KEY", Columns: []string{"parent_id"}, ReferenceTable: "parent", ReferenceColumns: []string{"id"}, OnUpdate: "CASCADE", OnDelete: "SET NULL"},
 		{Database: "constraints", Table: "child", Name: "child_id_pk", Type: "PRIMARY KEY", Columns: []string{"id"}},
 	}
 	for _, change := range changes {
@@ -253,6 +289,24 @@ func TestSQLiteAddConstraintsWithRebuild(t *testing.T) {
 	meta, err := readSQLiteMeta(context.Background(), conn, "child")
 	if err != nil || len(meta.Constraints) < 4 || !slices.ContainsFunc(meta.Constraints, func(c tableConstraint) bool { return c.Name == "child_score_check" && c.Type == "CHECK" }) {
 		t.Fatalf("constraint metadata: %+v %v", meta.Constraints, err)
+	}
+	if !slices.ContainsFunc(meta.Constraints, func(c tableConstraint) bool {
+		return c.Type == "FOREIGN KEY" && c.OnUpdate == "CASCADE" && c.OnDelete == "SET NULL"
+	}) {
+		t.Fatalf("foreign key actions missing: %+v", meta.Constraints)
+	}
+	if _, err = check.Exec(`PRAGMA foreign_keys=ON; UPDATE parent SET id=2 WHERE id=1`); err != nil {
+		t.Fatalf("ON UPDATE CASCADE failed: %v", err)
+	}
+	var parentID sql.NullInt64
+	if err = check.QueryRow(`SELECT parent_id FROM child WHERE id=1`).Scan(&parentID); err != nil || !parentID.Valid || parentID.Int64 != 2 {
+		t.Fatalf("child key was not updated: %v %v", parentID, err)
+	}
+	if _, err = check.Exec(`DELETE FROM parent WHERE id=2`); err != nil {
+		t.Fatalf("ON DELETE SET NULL failed: %v", err)
+	}
+	if err = check.QueryRow(`SELECT parent_id FROM child WHERE id=1`).Scan(&parentID); err != nil || parentID.Valid {
+		t.Fatalf("child key was not cleared: %v %v", parentID, err)
 	}
 	var objects int
 	if err = check.QueryRow(`SELECT count(*) FROM sqlite_schema WHERE name IN ('child_score','child_view','child_audit')`).Scan(&objects); err != nil || objects != 3 {

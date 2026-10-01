@@ -175,3 +175,16 @@ func TestMySQLEndpointsDispatchAndPasswordPrivacy(t *testing.T) {
 	}
 	request(t, handler, "GET", "/api/mysql/test", "", cookie, http.StatusMethodNotAllowed)
 }
+
+func TestMySQLTriggerTarget(t *testing.T) {
+	definition := "CREATE TRIGGER `audit` AFTER INSERT ON `sales`.`items` FOR EACH ROW BEGIN INSERT INTO log VALUES (NEW.id); END"
+	if !mysqlTriggerTarget(definition, "sales", "items", "audit") {
+		t.Fatal("matching trigger definition was rejected")
+	}
+	if mysqlTriggerTarget(definition, "sales", "other", "audit") || mysqlTriggerTarget(definition, "sales", "items", "other") {
+		t.Fatal("trigger definition for another object was accepted")
+	}
+	if !mysqlTriggerTarget("CREATE TRIGGER `işlem` AFTER INSERT ON `sales`.`ürün` FOR EACH ROW SET @n=NEW.id", "sales", "ürün", "işlem") {
+		t.Fatal("Unicode trigger names were rejected")
+	}
+}

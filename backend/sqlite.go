@@ -23,10 +23,11 @@ const sqliteTimeout = 30 * time.Second
 const sqliteUploadLimit = 256 << 20
 
 type sqliteCatalog struct {
-	Databases     []string `json:"databases"`
-	Tables        []string `json:"tables"`
-	Views         []string `json:"views"`
-	VirtualTables []string `json:"virtualTables"`
+	Databases     []string        `json:"databases"`
+	Tables        []string        `json:"tables"`
+	Views         []string        `json:"views"`
+	VirtualTables []string        `json:"virtualTables"`
+	Triggers      []schemaTrigger `json:"triggers"`
 }
 
 type sqliteMeta struct {
@@ -189,7 +190,7 @@ func (a *application) handleSQLiteTest(w http.ResponseWriter, r *http.Request) {
 }
 
 func sqliteCatalogFor(ctx context.Context, conn *sql.Conn, database string) (sqliteCatalog, error) {
-	result := sqliteCatalog{Databases: []string{database}, Tables: []string{}, Views: []string{}, VirtualTables: []string{}}
+	result := sqliteCatalog{Databases: []string{database}, Tables: []string{}, Views: []string{}, VirtualTables: []string{}, Triggers: []schemaTrigger{}}
 	rows, err := conn.QueryContext(ctx, "PRAGMA main.table_list")
 	if err != nil {
 		return result, err
@@ -216,9 +217,27 @@ func sqliteCatalogFor(ctx context.Context, conn *sql.Conn, database string) (sql
 	if err := rows.Err(); err != nil {
 		return result, err
 	}
+	rows.Close()
 	slices.Sort(result.Tables)
 	slices.Sort(result.Views)
 	slices.Sort(result.VirtualTables)
+	triggers, err := conn.QueryContext(ctx, "SELECT name,tbl_name FROM main.sqlite_schema WHERE type='trigger' ORDER BY tbl_name,name")
+	if err != nil {
+		return result, err
+	}
+	for triggers.Next() {
+		var trigger schemaTrigger
+		if err := triggers.Scan(&trigger.Name, &trigger.Table); err != nil {
+			triggers.Close()
+			return result, err
+		}
+		result.Triggers = append(result.Triggers, trigger)
+	}
+	err = triggers.Err()
+	triggers.Close()
+	if err != nil {
+		return result, err
+	}
 	return result, nil
 }
 
@@ -279,6 +298,35 @@ func (a *application) handleSQLiteCatalog(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, 200, catalog)
+}
+
+func (a *application) handleSQLiteTrigger(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		a.changeSQLiteTrigger(w, r)
+		return
+	}
+	query := r.URL.Query()
+	database, table, name := query.Get("database"), query.Get("table"), query.Get("name")
+	if !sqlitedb.ValidName(database) || !sqlitedb.ValidName(table) || !sqlitedb.ValidName(name) {
+		writeError(w, 400, "invalid_trigger", "Choose a trigger.")
+		return
+	}
+	conn, ctx, cleanup := a.openSQLiteRequest(w, r, database, true)
+	if conn == nil {
+		return
+	}
+	defer cleanup()
+	var definition string
+	err := conn.QueryRowContext(ctx, "SELECT sql FROM main.sqlite_schema WHERE type='trigger' AND name=? AND tbl_name=?", name, table).Scan(&definition)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 404, "trigger_not_found", "This trigger no longer exists. Refresh the sidebar.")
+		return
+	}
+	if err != nil {
+		writeSQLiteError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"definition": definition, "metadata": map[string]string{"Table": table}})
 }
 
 func writeSQLiteError(w http.ResponseWriter, err error) {
@@ -515,7 +563,7 @@ func readSQLiteMetaWithDetails(ctx context.Context, conn *sql.Conn, table string
 		name := fmt.Sprintf("fk_%d", id)
 		index := slices.IndexFunc(meta.Constraints, func(c tableConstraint) bool { return c.Name == name })
 		if index < 0 {
-			meta.Constraints = append(meta.Constraints, tableConstraint{Name: name, Type: "FOREIGN KEY", Definition: "REFERENCES " + sqlitedb.Quote(target) + " ON UPDATE " + onUpdate + " ON DELETE " + onDelete, Validated: true, Columns: []string{}, ReferenceTable: target, ReferenceColumns: []string{}})
+			meta.Constraints = append(meta.Constraints, tableConstraint{Name: name, Type: "FOREIGN KEY", Definition: "REFERENCES " + sqlitedb.Quote(target) + " ON UPDATE " + onUpdate + " ON DELETE " + onDelete, Validated: true, Columns: []string{}, ReferenceTable: target, ReferenceColumns: []string{}, OnUpdate: onUpdate, OnDelete: onDelete})
 			index = len(meta.Constraints) - 1
 		}
 		meta.Constraints[index].Columns = append(meta.Constraints[index].Columns, from)

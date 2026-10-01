@@ -17,6 +17,7 @@ test("constraint preview covers all concept types", () => {
   assert.match(changeSQL(tab, "constraint", { ...base, type: "UNIQUE" }), /UNIQUE \("customer_id"\)/);
   assert.match(changeSQL(tab, "constraint", { ...base, type: "CHECK", columns: [], expression: "amount >= 0" }), /CHECK \(amount >= 0\)/);
   assert.equal(changeSQL(tab, "constraint", { ...base, type: "FOREIGN KEY", referenceSchema: "public", referenceTable: "customers", referenceColumns: ["id"] }), 'ALTER TABLE "odd""schema"."orders" ADD CONSTRAINT "rule" FOREIGN KEY ("customer_id") REFERENCES "public"."customers" ("id") NOT VALID;\nALTER TABLE "odd""schema"."orders" VALIDATE CONSTRAINT "rule";');
+  assert.match(changeSQL(tab, "constraint", { ...base, type: "FOREIGN KEY", referenceSchema: "public", referenceTable: "customers", referenceColumns: ["id"], onUpdate: "CASCADE", onDelete: "SET DEFAULT" }), /ON UPDATE CASCADE ON DELETE SET DEFAULT NOT VALID;/);
 });
 
 test("MySQL previews use database names, backticks, and native constraint SQL", context => {
@@ -27,6 +28,7 @@ test("MySQL previews use database names, backticks, and native constraint SQL", 
     "ALTER TABLE `sales``db`.`orders` ADD UNIQUE INDEX `by_customer` (`customer_id`);");
   assert.equal(changeSQL(mysqlTab, "constraint", { name: "fk", type: "FOREIGN KEY", columns: ["customer_id"], referenceTable: "customers", referenceColumns: ["id"] }),
     "ALTER TABLE `sales``db`.`orders` ADD CONSTRAINT `fk` FOREIGN KEY (`customer_id`) REFERENCES `sales``db`.`customers` (`id`);");
+  assert.match(changeSQL(mysqlTab, "constraint", { name: "fk", type: "FOREIGN KEY", columns: ["customer_id"], referenceTable: "customers", referenceColumns: ["id"], onUpdate: "RESTRICT", onDelete: "SET NULL" }), /ON UPDATE RESTRICT ON DELETE SET NULL;$/);
   assert.equal(changeSQL(mysqlTab, "constraint", { name: "nonnegative", type: "CHECK", columns: [], expression: "amount >= 0" }),
     "ALTER TABLE `sales``db`.`orders` ADD CONSTRAINT `nonnegative` CHECK (amount >= 0);");
   state.connections = [{ id: "mysql", engine: "MariaDB" }];

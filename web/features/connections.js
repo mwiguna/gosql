@@ -31,6 +31,25 @@ const qualifiedTable = (id, db, schema, table) => mysqlFamily(getConnectionById(
   ? `${mysqlQuote(db)}.${mysqlQuote(table)}` : getConnectionById(id)?.engine === "SQLite"
     ? `main.${quoteSQL(table)}` : `${quoteSQL(schema)}.${quoteSQL(table)}`;
 const historyLocation = (connectionId, db, schemaName = "") => ({ connectionId, db, schemaName });
+export function objectSQLTemplate(engine, database, schema, kind) {
+  if (kind === "view") {
+    const qualified = engine === "PostgreSQL" ? `${quoteSQL(schema)}.${quoteSQL("new_view")}`
+      : engine === "SQLite" ? `main.${quoteSQL("new_view")}` : `${mysqlQuote(database)}.${mysqlQuote("new_view")}`;
+    return `CREATE VIEW ${qualified} AS\nSELECT 1 AS id;`;
+  }
+  const isFunction = kind === "function";
+  const name = isFunction ? "new_function" : "new_procedure";
+  if (engine === "PostgreSQL") {
+    const qualified = `${quoteSQL(schema)}.${quoteSQL(name)}`;
+    return isFunction
+      ? `CREATE FUNCTION ${qualified}()\nRETURNS integer\nLANGUAGE sql\nAS $$\n  SELECT 1;\n$$;`
+      : `CREATE PROCEDURE ${qualified}()\nLANGUAGE sql\nAS $$\n  SELECT 1;\n$$;`;
+  }
+  const qualified = `${mysqlQuote(database)}.${mysqlQuote(name)}`;
+  return isFunction
+    ? `CREATE FUNCTION ${qualified}()\nRETURNS INT\nDETERMINISTIC\nRETURN 1;`
+    : `CREATE PROCEDURE ${qualified}()\nSELECT 1;`;
+}
 export function getConnectionCatalog(id, database) { return databaseCatalogs.get(id)?.catalogs.get(database); }
 
 export async function loadDatabaseCatalog(id, database) {
@@ -163,19 +182,19 @@ function databaseTree(connection, database) {
   let content = "";
   if (expanded.has(key)) {
     if (connection.engine === "PostgreSQL") {
-      const schemas = (getConnectionCatalog(connection.id, database)?.schemas || []).map(({ name: schemaName, tables, views }) => {
+      const schemas = (getConnectionCatalog(connection.id, database)?.schemas || []).map(({ name: schemaName, tables, views, functions, procedures, triggers }) => {
         const schemaKey = key + ":" + schemaName;
         return `<details class="tree-group" data-tree-key="${escapeHtml(schemaKey)}"
             ${treeOpen.get(schemaKey) ?? false ? "open" : ""}>
           <summary data-action="database-schema" data-id="${escapeHtml(connection.id)}" data-db="${escapeHtml(database)}" data-schema="${escapeHtml(schemaName)}">${icon("chevron", "chevron")}${icon("branch")}${escapeHtml(schemaName)}</summary>
-          <div class="tree-indent">${objectTree(connection, database, schemaName, { Tables: tables, Views: views })}</div>
+          <div class="tree-indent">${objectTree(connection, database, schemaName, { Tables: tables, Views: views, Functions: functions || [], Procedures: procedures || [], Triggers: triggers || [] })}</div>
         </details>`;
       }).join("");
       content = `<div class="tree-label" data-action="schemas" data-id="${escapeHtml(connection.id)}" data-db="${escapeHtml(database)}">${icon("branch")}Schemas</div>${schemas || '<div class="hint">No accessible schemas.</div>'}`;
     } else {
       const catalog = getConnectionCatalog(connection.id, database);
       content = mysqlFamily(connection.engine) || connection.engine === "SQLite"
-        ? objectTree(connection, database, "", { Tables: catalog?.tables || [], Views: catalog?.views || [] })
+        ? objectTree(connection, database, "", { Tables: catalog?.tables || [], Views: catalog?.views || [], ...(mysqlFamily(connection.engine) ? { Functions: catalog?.functions || [], Procedures: catalog?.procedures || [] } : {}), Triggers: catalog?.triggers || [] })
         : '<div class="hint">Database access is not available for this engine yet.</div>';
     }
   }
@@ -191,27 +210,29 @@ function objectTree(connection, database, schemaName, groups) {
   return Object.entries(groups).map(([kind, names]) => {
     const key = [connection.id, database, schemaName, kind].join(":");
     const opened = treeOpen.get(key) ?? false;
-    const children = () => names.map((name) => {
+    const children = () => names.map((item) => {
+      const name = typeof item === "string" ? item : item.name;
+      const table = typeof item === "string" ? name : item.table;
       const isTable = kind === "Tables";
       const isView = kind === "Views" || kind === "Materialized Views";
-      const selected = getActiveTab()?.connectionId === connection.id
+      const selected = (isTable || isView) && getActiveTab()?.connectionId === connection.id
         && getActiveTab()?.db === database
         && getActiveTab()?.schemaName === schemaName
         && getActiveTab()?.table === name;
       const action = isTable ? "open-table" : isView ? "open-view" : "inspect-object";
       const virtual = isTable && connection.engine === "SQLite" && getConnectionCatalog(connection.id, database)?.virtualTables?.includes(name);
       const symbol = virtual ? "file" : isTable ? "table" : isView ? "eye"
-        : kind === "Functions" ? "terminal" : kind === "Sequences" ? "sort" : "file";
+        : kind === "Functions" || kind === "Procedures" ? "terminal" : kind === "Sequences" ? "sort" : "file";
       return `<div class="tree-row ${selected ? "active" : ""}">
         <button data-action="${action}" data-id="${connection.id}" data-db="${escapeHtml(database)}"
-          data-schema="${escapeHtml(schemaName)}" data-table="${escapeHtml(name)}" data-kind="${kind}">
-          ${icon(symbol)}<span>${escapeHtml(name)}</span>${virtual ? '<small>Virtual</small>' : ""}
+          data-schema="${escapeHtml(schemaName)}" data-table="${escapeHtml(table)}" data-name="${escapeHtml(name)}" data-kind="${kind}">
+          ${icon(symbol)}<span>${escapeHtml(kind === "Triggers" ? table + "." + name : name)}</span>${virtual ? '<small>Virtual</small>' : ""}
         </button>
       </div>`;
     }).join("");
     treeChildren.set(key, children);
     return `<details class="tree-group" data-tree-key="${escapeHtml(key)}" ${opened ? "open" : ""}>
-      <summary>${icon("chevron", "chevron")}${icon("folder")}${kind}
+      <summary data-action="object-group" data-id="${escapeHtml(connection.id)}" data-db="${escapeHtml(database)}" data-schema="${escapeHtml(schemaName)}" data-kind="${kind}">${icon("chevron", "chevron")}${icon("folder")}${kind}
         <span class="spacer"></span><small>${names.length}</small>
       </summary>
       <div class="tree-indent">${opened ? children() : ""}</div>
@@ -229,6 +250,119 @@ export function syncTreeSelection() {
     && element.dataset.schema === tab.schemaName
     && element.dataset.table === tab.table);
   selected?.parentElement.classList.add("active");
+}
+
+async function inspectRoutine(element) {
+  const kind = element.dataset.kind;
+  const database = element.dataset.db;
+  const schema = element.dataset.schema;
+  const name = element.dataset.table;
+  const params = new URLSearchParams({ database, schema, name, kind: kind === "Functions" ? "function" : "procedure" });
+  try {
+    const details = await apiRequest(`/connections/${encodeURIComponent(element.dataset.id)}/routines?${params}`);
+    const metadata = Object.entries(details.metadata || {}).filter(([, value]) => value).sort(([a], [b]) => a.localeCompare(b)).map(([label, value]) => `<span>${escapeHtml(label.toUpperCase())}<strong>${escapeHtml(value)}</strong></span>`).join("");
+    showDialog(`${kind === "Functions" ? "Function" : "Procedure"} · ${escapeHtml(name)}`, `<div class="stack"><pre class="sql-preview">${escapeHtml(details.definition)}</pre><div class="metadata-foot">${metadata}</div></div>`, button("close-dialog", "Close"), true);
+  } catch (error) { toast(error.message); }
+}
+
+async function inspectTrigger(element) {
+  const { id, db: database, schema, table, name } = element.dataset;
+  const params = new URLSearchParams({ database, schema, table, name });
+  try {
+    const details = await apiRequest(`/connections/${encodeURIComponent(id)}/triggers?${params}`);
+    const metadata = Object.entries(details.metadata || {}).filter(([, value]) => value).sort(([a], [b]) => a.localeCompare(b)).map(([label, value]) => `<span>${escapeHtml(label.toUpperCase())}<strong>${escapeHtml(value)}</strong></span>`).join("");
+    const attributes = `data-id="${escapeHtml(id)}" data-db="${escapeHtml(database)}" data-schema="${escapeHtml(schema)}" data-table="${escapeHtml(table)}" data-name="${escapeHtml(name)}"`;
+    const protectedDatabase = mysqlFamily(getConnectionById(id)?.engine) && ["mysql", "information_schema", "performance_schema", "sys"].includes(database.toLowerCase());
+    showDialog(`Trigger · ${escapeHtml(name)}`, `<div class="stack"><pre class="sql-preview">${escapeHtml(details.definition)}</pre><div class="metadata-foot">${metadata}</div></div>`, (protectedDatabase ? "" : button("delete-trigger", "Delete", "trash", "danger", attributes) + button("edit-trigger", "Edit", "edit", "", attributes)) + button("close-dialog", "Close"), true);
+  } catch (error) { toast(error.message); }
+}
+
+function triggerSQL(engine, schema, table, name, timing, event, action) {
+  const qualified = engine === "PostgreSQL" ? `${quoteSQL(schema)}.${quoteSQL(table)}` : engine === "SQLite" ? `main.${quoteSQL(table)}` : `${mysqlQuote(schema)}.${mysqlQuote(table)}`;
+  const identifier = engine === "PostgreSQL" || engine === "SQLite" ? quoteSQL(name) : mysqlQuote(name);
+  if (engine === "PostgreSQL") return `CREATE TRIGGER ${identifier} ${timing} ${event} ON ${qualified} FOR EACH ROW EXECUTE FUNCTION ${action.trim()};`;
+  const body = action.trim().replace(/;+$/, "");
+  return `CREATE TRIGGER ${identifier} ${timing} ${event} ON ${qualified} FOR EACH ROW BEGIN\n  ${body};\nEND;`;
+}
+
+async function openTriggerForm(id, database, schema, table = "", name = "") {
+  const connection = getConnectionById(id);
+  if (!connection) return;
+  const engine = connection.engine;
+  const catalog = await loadDatabaseCatalog(id, database);
+  if (!catalog) return;
+  const schemaCatalog = engine === "PostgreSQL" ? catalog.schemas.find(item => item.name === schema) : catalog;
+  if (!schemaCatalog) return toast("This schema is no longer available. Refresh the database.");
+  const tables = [...schemaCatalog.tables, ...(["PostgreSQL", "SQLite"].includes(engine) ? schemaCatalog.views : [])];
+  if (!tables.length) return toast("Create a table before adding a trigger.");
+  const editing = Boolean(name);
+  const existing = editing ? await apiRequest(`/connections/${encodeURIComponent(id)}/triggers?${new URLSearchParams({ database, schema, table, name })}`) : null;
+  const context = engine === "PostgreSQL" ? schema : database;
+  showDialog(editing ? "Edit trigger" : "Create trigger", `<form id="trigger-form" class="stack">
+    <p class="hint">${escapeHtml(database)} / ${escapeHtml(context)}${editing ? " / " + escapeHtml(table) : ""}</p>
+    ${editing ? `<label>Trigger name<input value="${escapeHtml(name)}" disabled></label><label>Table<input value="${escapeHtml(table)}" disabled></label>`
+      : `<label>Table<select name="table" required>${tables.map(item => `<option value="${escapeHtml(item)}" ${item === table ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}</select></label><label>Trigger name<input name="name" maxlength="${engine === "SQLite" ? 255 : engine === "PostgreSQL" ? 63 : 64}" required></label>
+        <div class="form-grid">
+          <label>Timing<select name="timing"><option>BEFORE</option><option>AFTER</option>${engine !== "MySQL" && engine !== "MariaDB" ? "<option>INSTEAD OF</option>" : ""}</select></label>
+          <label>Event<select name="event"><option>INSERT</option><option>UPDATE</option><option>DELETE</option></select></label>
+        </div>
+        ${engine === "PostgreSQL" ? `<label>Trigger function<input name="action" list="trigger-functions" required placeholder="${escapeHtml(schema)}.audit_changes()"></label><datalist id="trigger-functions">${(schemaCatalog.functions || []).filter(signature => signature.endsWith("()")).map(signature => `<option value="${escapeHtml(quoteSQL(schema) + "." + quoteSQL(signature.slice(0, -2)) + "()")}">`).join("")}</datalist>`
+          : '<label>Trigger body<textarea name="action" rows="5" required placeholder="INSERT INTO audit_log(message) VALUES (NEW.id)"></textarea></label>'}`}
+    ${editing ? `<label>CREATE TRIGGER SQL<textarea name="definition" rows="12" required>${escapeHtml(existing.definition)}</textarea></label>${mysqlFamily(engine) ? '<p class="hint">MySQL and MariaDB replace triggers by dropping the old definition before creating the new one.</p>' : ""}` : '<pre id="trigger-preview" class="sql-preview"></pre>'}
+    <div id="trigger-error" class="error-text" role="alert"></div>
+    <button type="submit" class="primary">Review SQL</button>
+  </form>`, "", true);
+  const form = findElement("#trigger-form");
+  const preview = () => {
+    if (editing) return form.elements.definition.value.trim();
+    const tableName = form.elements.table.value;
+    const triggerName = form.elements.name.value.trim();
+    const action = form.elements.action.value.trim();
+    const sql = triggerName && action ? triggerSQL(engine, engine === "PostgreSQL" ? schema : database, tableName, triggerName, form.elements.timing.value, form.elements.event.value, action) : "";
+    findElement("#trigger-preview").textContent = sql;
+    return sql;
+  };
+  form.oninput = preview;
+  form.onchange = preview;
+  preview();
+  form.onsubmit = event => {
+    event.preventDefault();
+    if (!form.reportValidity()) return;
+    const definition = preview();
+    const selectedTable = editing ? table : form.elements.table.value;
+    const selectedName = editing ? name : form.elements.name.value.trim();
+    const body = { database, schema, table: selectedTable, name: selectedName, definition };
+    const method = editing ? "PATCH" : "POST";
+    showDialog("Review trigger change", `<p>${escapeHtml(database)} / ${escapeHtml(selectedTable)}</p><pre class="sql-preview">${escapeHtml(definition)}</pre>`, button("close-dialog", "Cancel") + button("confirm-trigger", editing ? "Save trigger" : "Create trigger", "check", "primary"), true);
+    findElement('[data-action="confirm-trigger"]').onclick = async event => {
+      event.currentTarget.disabled = true;
+      try {
+        await runRecordedSQL(`/connections/${encodeURIComponent(id)}/triggers`, { method, body }, historyLocation(id, database, schema), definition);
+        closeDialog();
+        await refreshDatabaseCatalog(id, database);
+        treeOpen.set([id, database, schema, "Triggers"].join(":"), true);
+        onWorkspaceChange();
+        toast(editing ? "Trigger updated." : "Trigger created.");
+      } catch (error) { toast(error.message); event.currentTarget.disabled = false; }
+    };
+  };
+}
+
+function deleteTrigger(id, database, schema, table, name) {
+  const engine = getConnectionById(id)?.engine;
+  const qualified = engine === "PostgreSQL" ? `${quoteSQL(schema)}.${quoteSQL(table)}` : engine === "SQLite" ? `main.${quoteSQL(name)}` : `${mysqlQuote(database)}.${mysqlQuote(name)}`;
+  const sql = engine === "PostgreSQL" ? `DROP TRIGGER ${quoteSQL(name)} ON ${qualified};` : `DROP TRIGGER ${qualified};`;
+  showDialog("Delete trigger?", `<p>Remove <strong>${escapeHtml(name)}</strong> from <strong>${escapeHtml(table)}</strong>?</p><pre class="sql-preview">${escapeHtml(sql)}</pre>`, button("close-dialog", "Cancel") + button("confirm-trigger-delete", "Delete", "trash", "danger"));
+  findElement('[data-action="confirm-trigger-delete"]').onclick = async event => {
+    event.currentTarget.disabled = true;
+    try {
+      await runRecordedSQL(`/connections/${encodeURIComponent(id)}/triggers`, { method: "DELETE", body: { database, schema, table, name } }, historyLocation(id, database, schema), sql);
+      closeDialog();
+      await refreshDatabaseCatalog(id, database);
+      onWorkspaceChange();
+      toast("Trigger deleted.");
+    } catch (error) { toast(error.message); event.currentTarget.disabled = false; }
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -1242,8 +1376,29 @@ export function handleConnectionsAction(action, element) {
       }
       break;
     }
+    case "refresh-database":
+      connectToDatabase(id, async () => {
+        try {
+          if (!await loadDatabaseCatalog(id, element.dataset.db)) return;
+          await refreshDatabaseCatalog(id, element.dataset.db);
+          onWorkspaceChange();
+          toast("Database objects refreshed.");
+        } catch (error) { toast(error.message); }
+      });
+      break;
     case "inspect-object":
-      toast("Object details are not available yet.");
+      if (["Functions", "Procedures"].includes(element.dataset.kind)) inspectRoutine(element);
+      else if (element.dataset.kind === "Triggers") inspectTrigger(element);
+      else toast("Object details are not available yet.");
+      break;
+    case "create-trigger":
+      openTriggerForm(id, element.dataset.db, element.dataset.schema || "").catch(error => toast(error.message));
+      break;
+    case "edit-trigger":
+      openTriggerForm(id, element.dataset.db, element.dataset.schema || "", element.dataset.table, element.dataset.name).catch(error => toast(error.message));
+      break;
+    case "delete-trigger":
+      deleteTrigger(id, element.dataset.db, element.dataset.schema || "", element.dataset.table, element.dataset.name);
       break;
     case "create-table":
       createTable(id, element.dataset.db, element.dataset.schema);
