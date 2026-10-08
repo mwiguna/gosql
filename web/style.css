@@ -1331,9 +1331,24 @@ p {
 .schema-table td:first-child {
   font-weight: 500;
 }
+.schema-table .schema-no {
+  color: #9ca3af;
+  font-weight: 400;
+}
+.schema-table .schema-yes {
+  color: #000;
+  font-weight: 700;
+}
 .schema-table code {
   font-size: 11px;
   color: #748197;
+}
+.console-actions #query-template {
+  width: auto;
+  min-height: 27px;
+  padding: 4px 8px;
+  font-size: 11px;
+  flex-shrink: 0;
 }
 .constraint-triggers {
   display: block;

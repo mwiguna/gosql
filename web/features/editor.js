@@ -1,5 +1,6 @@
 import { findElement, findElements, icon } from "../ui.js";
 import { getActiveTab, getConnectionById, state } from "../state.js";
+import { querySQLTemplate } from "./query-templates.js";
 
 // -----------------------------------------------------------------------------
 // Editor library and private state
@@ -116,6 +117,18 @@ export function destroyEditor() {
 export function getQueryText(tab) {
   const selection = editor?.state.selection.main;
   return selection && !selection.empty ? editor.state.sliceDoc(selection.from, selection.to) : tab.sql;
+}
+
+export function setQueryText(tab, text) {
+  const view = editorTabId === tab.id ? editor : null;
+  const current = view?.state || tab.editorState;
+  const transaction = current && {
+    changes: { from: 0, to: current.doc.length, insert: text },
+    selection: { anchor: 0 }
+  };
+  if (view) view.dispatch(transaction);
+  else if (current) tab.editorState = current.update(transaction).state;
+  tab.sql = text;
 }
 
 // -----------------------------------------------------------------------------
@@ -243,6 +256,17 @@ function querySearchPanel(view) {
 export function handleEditorAction(action, element, onRunQuery) {
   const activeTab = getActiveTab();
   switch (action) {
+    case "query-template": {
+      const command = element.value;
+      const connection = activeTab && getConnectionById(activeTab.connectionId);
+      if (!connection || !["SELECT", "INSERT", "UPDATE", "DELETE"].includes(command)) break;
+      setQueryText(activeTab, querySQLTemplate(connection.engine, activeTab, command));
+      activeTab.queryTemplate = command;
+      activeTab.consoleOpen = true;
+      toggleConsole(activeTab, onRunQuery);
+      editor?.focus();
+      break;
+    }
     case "toggle-console":
       activeTab.consoleOpen = !activeTab.consoleOpen;
       toggleConsole(activeTab, onRunQuery);

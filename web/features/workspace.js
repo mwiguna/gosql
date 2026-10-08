@@ -8,7 +8,7 @@ import {
   toast, createId
 } from "../ui.js";
 import { apiRequest } from "../api.js";
-import { destroyEditor, mountEditor } from "./editor.js";
+import { destroyEditor, mountEditor, handleEditorAction } from "./editor.js";
 import { destroyGrid, renderData } from "./grid.js";
 
 // -----------------------------------------------------------------------------
@@ -154,7 +154,7 @@ export function renderWorkspace() {
   const editorMarkup = tab.consoleOpen ? `<div id="query-search"></div>
     <div class="editor-wrap" id="editor"></div>
     <div class="console-caption">${icon("info")}Tab to indent · Shift+Tab to unindent · Esc then Tab to leave editor.
-      <span class="spacer"></span><span>${connection.engine === "SQLite" ? "One SELECT statement" : "SQL"}</span>
+      <span class="spacer"></span><span>${connection.engine === "SQLite" ? "One SELECT, INSERT, UPDATE, or DELETE statement" : "SQL"}</span>
     </div>` : "";
   const consoleMarkup = `<section class="console">
     <div class="console-head">
@@ -162,6 +162,10 @@ export function renderWorkspace() {
       <span class="pill">${connection.engine}</span><span class="spacer"></span>
       <div class="console-actions">
         ${button("editor-search", "", "search", "icon ghost", `aria-label="Find and replace" title="Find and Replace" aria-expanded="${Boolean(tab.consoleOpen && tab.findOpen)}" aria-controls="query-search"`)}
+        <select id="query-template" aria-label="Query template" title="Query template">
+          <option value="">Templates</option>
+          ${["SELECT", "INSERT", "UPDATE", "DELETE"].map(command => `<option value="${command}" ${tab.queryTemplate === command ? "selected" : ""}>${command[0] + command.slice(1).toLowerCase()}</option>`).join("")}
+        </select>
         ${button("save-query", '<span class="save-query-label">Save</span>', "bookmark", "ghost", 'aria-label="Save query"')}
         ${button("query-new-tab", '<span class="new-tab-label">Open in New Tab</span>', "external", "ghost", 'aria-label="Open in New Tab"')}
         ${button(runAction, runAction === "cancel-query" ? "Cancel" : "Run", runAction === "cancel-query" ? "x" : "play", "primary console-run")}
@@ -183,6 +187,7 @@ export function renderWorkspace() {
   <section class="data-area" id="data-area"></section>
   <div class="table-note">${icon("info")}<span>${note}</span></div>`;
 
+  findElement("#query-template").onchange = event => handleEditorAction("query-template", event.target, onRunQuery);
   if (tab.consoleOpen) mountEditor(tab, connection, onRunQuery);
   renderData();
   syncTreeSelection();
@@ -359,6 +364,9 @@ export function openQueryTab(text, destination) {
   const count = state.tabs.filter((tab) => tab.queryTab).length;
   const tab = createWorkspaceTab(parent.connectionId, parent.db, parent.table, false, parent.schemaName);
   tab.schema = structuredClone(parent.schema || []);
+  tab.primaryKey = [...(parent.primaryKey || [])];
+  tab.indexes = structuredClone(parent.indexes || []);
+  tab.constraints = structuredClone(parent.constraints || []);
   tab.title = "Query " + (count + 1);
   tab.queryTab = true;
   tab.consoleOpen = true;

@@ -49,7 +49,7 @@ export async function runQuery() {
     });
     rowCount = result.columns.length ? result.rows.length : result.affectedRows;
     tab.result = { rows: result.rows, columns: result.columns, duration: result.duration };
-    if (!result.columns.length) tab.result.message = `${result.command || "Statement completed"} · ${result.duration} ms`;
+    if (!result.columns.length) tab.result.message = `${result.command || "Statement completed"} · ${result.affectedRows} rows affected · ${result.duration} ms`;
     tab.page = 1;
     if (state.activeTabId === tab.id) {
       if (!tab.queryTab && tab.view !== "Data") { tab.view = "Data"; renderWorkspace(); }

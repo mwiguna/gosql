@@ -66,7 +66,8 @@ func readPostgresTableMeta(ctx context.Context, conn *pgx.Conn, schema, table st
 		ARRAY(SELECT a.attname::text FROM unnest(i.indkey) WITH ORDINALITY k(attnum,pos)
 		JOIN pg_catalog.pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum WHERE k.pos<=i.indnkeyatts ORDER BY k.pos),
 		EXISTS(SELECT 1 FROM pg_catalog.pg_constraint con WHERE con.conindid=i.indexrelid),
-		i.indpred IS NULL AND i.indexprs IS NULL AND i.indnatts=i.indnkeyatts AND am.amname='btree'
+		i.indpred IS NULL AND i.indexprs IS NULL AND i.indnatts=i.indnkeyatts AND am.amname='btree',
+		i.indpred IS NOT NULL, i.indexprs IS NOT NULL
 		FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class ic ON ic.oid=i.indexrelid
 		JOIN pg_catalog.pg_am am ON am.oid=ic.relam
 		WHERE i.indrelid=$1 ORDER BY ic.relname`, oid)
@@ -75,7 +76,7 @@ func readPostgresTableMeta(ctx context.Context, conn *pgx.Conn, schema, table st
 	}
 	for rows.Next() {
 		var item tableIndex
-		if err = rows.Scan(&item.Name, &item.Definition, &item.Unique, &item.Primary, &item.Method, &item.Columns, &item.Managed, &item.Editable); err != nil {
+		if err = rows.Scan(&item.Name, &item.Definition, &item.Unique, &item.Primary, &item.Method, &item.Columns, &item.Managed, &item.Editable, &item.Partial, &item.Expression); err != nil {
 			break
 		}
 		meta.Indexes = append(meta.Indexes, item)

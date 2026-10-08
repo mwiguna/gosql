@@ -36,6 +36,26 @@ function columnChangeSQL(tab, value, editing) {
 // -----------------------------------------------------------------------------
 // Metadata display
 // -----------------------------------------------------------------------------
+export function columnUniqueLabel(tab, name, includePrimary = true) {
+  const groups = [];
+  const add = columns => {
+    if (!columns?.includes(name) || !columns.every(column => tab.schema.some(value => value.name === column))) return;
+    if (!groups.some(group => group.length === columns.length && group.every(column => columns.includes(column)))) groups.push(columns);
+  };
+  for (const constraint of tab.constraints || []) {
+    if (constraint.type === "UNIQUE" || includePrimary && constraint.type === "PRIMARY KEY") add(constraint.columns);
+  }
+  for (const index of tab.indexes || []) {
+    if (index.unique && !index.partial && !index.expression && (includePrimary || !index.primary)) add(index.columns);
+  }
+  if (includePrimary) {
+    const declared = tab.schema.filter(column => column.key === "PRIMARY KEY").map(column => column.name);
+    add(declared.length ? declared : tab.primaryKey);
+  }
+  const labels = groups.map(columns => columns.length === 1 ? "yes" : `yes (${columns.join(",")})`);
+  return labels.length ? [...new Set(labels)].join("; ") : "no";
+}
+
 export function renderStructure(tab, area) {
   if (tab.loading || tab.loadError) {
     area.innerHTML = `<div class="result-empty" role="status">${escapeHtml(tab.loadError || "Loading structure…")}</div>`;
@@ -43,7 +63,7 @@ export function renderStructure(tab, area) {
   }
   const mode = tab.view;
   const protectedDatabase = mysql(tab) && ["mysql", "information_schema", "performance_schema", "sys"].includes(tab.db.toLowerCase());
-  const fields = mode === "Structure" ? ["Column", "Type", "Nullable", "Default", "Key"]
+  const fields = mode === "Structure" ? ["Column", "Type", "Nullable", "Default", "Key", "Unique"]
     : mode === "Indexes" ? ["Name", "Definition", "Unique"] : ["Name", "Definition", "Type"];
   const values = mode === "Structure" ? tab.schema : mode === "Indexes" ? tab.indexes : tab.constraints;
   const kind = mode === "Structure" ? "column" : mode === "Indexes" ? "index" : "constraint";
@@ -57,6 +77,7 @@ export function renderStructure(tab, area) {
         : [escapeHtml(value.name), `<code>${escapeHtml(value.definition)}</code>${value.type === "FOREIGN KEY" ? value.triggers?.length
           ? `<details class="constraint-triggers"><summary>FK triggers (${value.triggers.length})</summary>${value.triggers.map(definition => `<pre class="sql-preview">${escapeHtml(definition)}</pre>`).join("")}</details>`
           : '<small class="constraint-triggers">FK enforcement is managed internally by the database.</small>' : ""}`, escapeHtml(value.type) + (value.validated === false ? " · Not validated" : "")];
+    if (mode === "Structure") cells.push(escapeHtml(columnUniqueLabel(tab, value.name)));
     const editable = actions && !tab.isView && (mode === "Structure" ? !sqlite(tab) || value.key !== "ROWID" && value.key !== "PRIMARY KEY"
       : mode === "Indexes" ? value.editable && !value.managed && !value.primary : !sqlite(tab) && ["UNIQUE", "FOREIGN KEY", "CHECK", "PRIMARY KEY"].includes(value.type));
     const canEditDefinition = !((mysql(tab) || sqlite(tab)) && mode === "Structure") || value.definitionEditable;
@@ -64,7 +85,11 @@ export function renderStructure(tab, area) {
       ? iconButton("schema-validate", "Validate " + value.name, "check", `data-kind="${kind}" data-index="${index}"`) : "";
     const controls = editable ? validate + (canEditDefinition && !(sqlite(tab) && mode === "Indexes") ? iconButton("schema-edit", "Edit " + value.name, "edit", `data-kind="${kind}" data-index="${index}"`) : "")
       + iconButton("schema-delete", "Delete " + value.name, "trash", `data-kind="${kind}" data-index="${index}"`) : "";
-    return `<tr>${cells.map(cell => `<td>${cell}</td>`).join("")}${actions ? `<td><div class="row">${controls}</div></td>` : ""}</tr>`;
+    return `<tr>${cells.map((cell, column) => {
+      const booleanCell = mode === "Structure" && (column === 2 || column === 5);
+      const yes = column === 2 ? value.nullable : cell !== "no";
+      return `<td${booleanCell ? ` class="${yes ? "schema-yes" : "schema-no"}"` : ""}>${cell}</td>`;
+    }).join("")}${actions ? `<td><div class="row">${controls}</div></td>` : ""}</tr>`;
   }).join("") || `<tr><td colspan="${fields.length + Number(actions)}">No ${mode.toLowerCase()} yet.</td></tr>`;
   const add = mode === "Structure" ? button("schema-add", "Add column", "plus", "primary", 'data-kind="column"')
     : mode === "Indexes" ? button("schema-add", "Add index", "plus", "primary", 'data-kind="index"')

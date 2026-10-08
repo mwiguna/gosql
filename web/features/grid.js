@@ -143,7 +143,7 @@ function renderRemoteData(tab) {
   findElement("#reconnect-table").hidden = !tab.connectionRequired;
   findElement("#delete-selected").hidden = !tab.editable;
   findElement("#remote-add-row").hidden = Boolean(tab.queryTab || tab.isView || tab.result);
-  findElement("#remote-add-row").disabled = tab.loading;
+  findElement("#remote-add-row").disabled = tab.loading || (getConnectionById(tab.connectionId)?.engine === "SQLite" && !tab.editable);
   findElement('[data-action="refresh-table"]', area).disabled = tab.loading;
   const key = JSON.stringify([tab.editable, ...tab.schema.map(column => column.name)]);
   const data = tab.rows.map((row, index) => Object.fromEntries([["_row", index], ...row.map((value, column) => ["c" + column, value])]));
@@ -303,6 +303,75 @@ async function insertDefaultRow(tab) {
   } catch (error) {
     toast(error.code === "not_null_violation" ? "A required column has no default. Add a default or use the query console to provide a value." : error.message);
   } finally { mutationPending = false; }
+}
+
+export function sqliteInsertValues(columns, entries) {
+  const values = Object.create(null);
+  columns.forEach((column, index) => {
+    if (entries[index].mode === "value") values[column.name] = entries[index].value;
+    else if (entries[index].mode === "null" && column.nullable) values[column.name] = null;
+  });
+  return values;
+}
+
+function openSQLiteInsertForm(tab) {
+  if (mutationPending || tab.loading || !tab.editable) return;
+  const columns = tab.schema.filter(column => column.editable && !column.generated && !column.hidden && column.key !== "ROWID");
+  showDialog("Add row", `<form id="sqlite-insert-form" class="stack">
+    <p class="hint">Choose Default to let SQLite supply a value. BLOB values use hexadecimal notation: \\x00FF.</p>
+    ${columns.map((column, index) => `<div class="stack">
+      <label>${escapeHtml(column.name)} <small>${escapeHtml(column.type)}${column.nullable ? "" : " · Required"}</small>
+        <select data-insert-mode="${index}" aria-label="${escapeHtml(column.name)} value mode">
+          <option value="default">Default${column.default == null ? "" : ": " + escapeHtml(column.default)}</option>
+          <option value="value">Value</option>${column.nullable ? '<option value="null">NULL</option>' : ""}
+        </select>
+      </label>
+      <label data-insert-label="${index}" hidden>Value<textarea data-insert-value="${index}" aria-label="${escapeHtml(column.name)} value" disabled></textarea></label>
+    </div>`).join("")}
+    <p id="sqlite-insert-error" class="error-text" role="alert" hidden></p>
+    <button type="submit" class="primary">Insert row</button>
+  </form>`, button("close-dialog", "Cancel"));
+  const form = findElement("#sqlite-insert-form");
+  const entries = columns.map((column, index) => ({
+    mode: form.querySelector(`[data-insert-mode="${index}"]`),
+    input: form.querySelector(`[data-insert-value="${index}"]`),
+    label: form.querySelector(`[data-insert-label="${index}"]`)
+  }));
+  entries.forEach(entry => {
+    entry.mode.onchange = () => {
+      entry.label.hidden = entry.mode.value !== "value";
+      entry.input.disabled = entry.mode.value !== "value";
+      if (!entry.input.disabled) entry.input.focus();
+    };
+  });
+  form.onsubmit = async event => {
+    event.preventDefault();
+    if (mutationPending || !state.tabs.includes(tab)) return;
+    mutationPending = true;
+    const submit = form.querySelector('[type="submit"]');
+    const errorNode = form.querySelector("#sqlite-insert-error");
+    submit.disabled = true;
+    errorNode.hidden = true;
+    const values = sqliteInsertValues(columns, entries.map(entry => ({ mode: entry.mode.value, value: entry.input.value })));
+    const quote = name => '"' + name.replaceAll('"', '""') + '"';
+    const names = Object.keys(values);
+    const literal = (name) => values[name] === null ? "NULL"
+      : /^BLOB$/i.test(columns.find(column => column.name === name).type) && /^\\x(?:[\da-f]{2})*$/i.test(values[name])
+        ? "X'" + values[name].slice(2) + "'" : "'" + values[name].replaceAll("'", "''") + "'";
+    const sql = `INSERT INTO main.${quote(tab.table)} ` + (names.length
+      ? `(${names.map(quote).join(", ")}) VALUES (${names.map(literal).join(", ")});` : "DEFAULT VALUES;");
+    try {
+      await runRecordedSQL("/connections/" + encodeURIComponent(tab.connectionId) + "/rows/insert", {
+        method: "POST", body: { database: tab.db, schema: tab.schemaName, table: tab.table, values }
+      }, { connectionId: tab.connectionId, db: tab.db, schemaName: tab.schemaName }, sql);
+      if (findElement("#sqlite-insert-form") === form) closeDialog();
+      if (state.tabs.includes(tab)) await onLoadTablePage(tab, 1, true);
+      toast("Row added.");
+    } catch (error) {
+      errorNode.textContent = error.message;
+      errorNode.hidden = false;
+    } finally { mutationPending = false; submit.disabled = false; }
+  };
 }
 
 function mountGrid() {
@@ -791,7 +860,13 @@ export async function handleGridAction(action, element) {
       confirmAction("Delete selected rows?", `Delete <strong>${rows.length}</strong> selected rows from <strong>${escapeHtml(activeTab.table)}</strong>? This cannot be undone. Database cascades or triggers may affect other rows.`, "Delete Rows", () => mutateRemoteRow(activeTab, "delete", { rows }));
       return true;
     }
-    if (action === "add-row") { if (!activeTab.queryTab && !activeTab.isView && !activeTab.result) await insertDefaultRow(activeTab); return true; }
+    if (action === "add-row") {
+      if (!activeTab.queryTab && !activeTab.isView && !activeTab.result) {
+        if (getConnectionById(activeTab.connectionId)?.engine === "SQLite") openSQLiteInsertForm(activeTab);
+        else await insertDefaultRow(activeTab);
+      }
+      return true;
+    }
     if (["filters", "sort"].includes(action)) {
       toast("This action is not available for remote tables yet.");
       return true;

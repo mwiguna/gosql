@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { loadTablePage, renderWorkspace, retryTableCount } from "../features/workspace.js";
-import { canEditRemoteCell, cellEditor, formatCellValue, getCellMenuActions, handleGridAction, initializeGrid, mutateRemoteRow, renderData, selectedRemoteRow } from "../features/grid.js";
+import { canEditRemoteCell, cellEditor, formatCellValue, getCellMenuActions, handleGridAction, initializeGrid, mutateRemoteRow, renderData, selectedRemoteRow, sqliteInsertValues } from "../features/grid.js";
 import { state } from "../state.js";
 
 function setup(context) {
@@ -248,6 +248,76 @@ test("Add row inserts defaults directly and shows the stored row without a modal
   assert.equal(await handleGridAction("add-row", {}), true);
   assert.equal(reloaded, 1);
   assert.equal(state.queryHistory[0].sql, `INSERT INTO "${tab.schemaName}"."items" ("id") VALUES (7);`);
+});
+
+test("SQLite insert preserves empty strings, NULL, omitted defaults and special names", () => {
+  const columns = [{ name: "default" }, { name: "empty" }, { name: "optional", nullable: true }, { name: "__proto__" }];
+  const values = sqliteInsertValues(columns, [{ mode: "default" }, { mode: "value", value: "" }, { mode: "null" }, { mode: "value", value: "safe" }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(values)), { empty: "", optional: null, ["__proto__"]: "safe" });
+});
+
+test("SQLite Add Row opens a form, keeps failed inputs and recounts after saving", async context => {
+  const tab = setup(context);
+  Object.assign(tab, { remote: true, editable: true, schemaName: "", table: "items", schema: [
+    { name: "rowid", key: "ROWID", editable: false },
+    { name: "name", type: "TEXT", editable: true, nullable: false },
+    { name: "optional", type: "TEXT", editable: true, nullable: true },
+    { name: "score", type: "INTEGER", editable: true, default: "1" },
+    { name: "generated", type: "TEXT", editable: false, generated: "STORED" }
+  ] });
+  const previousConnections = state.connections;
+  state.connections = [{ id: "pg", engine: "SQLite" }];
+  state.activeTabId = tab.id;
+  state.queryHistory = [];
+  context.after(() => { state.connections = previousConnections; state.queryHistory = []; delete globalThis.document; });
+  const entries = [0, 1, 2].map(() => ({ mode: { value: "default" }, input: { value: "", disabled: true, focus() {} }, label: { hidden: true } }));
+  const submit = { disabled: false };
+  const error = { hidden: true };
+  const form = { querySelector(selector) {
+    if (selector === '[type="submit"]') return submit;
+    if (selector === "#sqlite-insert-error") return error;
+    const match = selector.match(/data-insert-(mode|value|label)="(\d+)"/);
+    return entries[Number(match[2])][match[1] === "value" ? "input" : match[1]];
+  } };
+  const toast = { classList: { add() {}, remove() {} } };
+  const dialog = { style: {}, open: false, showModal() { this.open = true; }, close() { this.open = false; }, append() {} };
+  globalThis.document = { body: { append() {} }, querySelector: selector => ({ "#toast": toast, "#dialog": dialog, "#sqlite-insert-form": form })[selector] || null };
+  context.mock.method(globalThis, "setTimeout", () => 1);
+  let reloaded = 0, inserts = 0;
+  initializeGrid({ onLoadTablePage: async (current, page, recount) => {
+    assert.equal(current, tab); assert.equal(page, 1); assert.equal(recount, true); reloaded++;
+  } });
+  context.mock.method(globalThis, "fetch", async (path, options) => {
+    if (path === "/api/history") return { ok: true, status: 204 };
+    assert.equal(path, "/api/connections/pg/rows/insert");
+    assert.deepEqual(JSON.parse(options.body).values, { name: "", optional: null });
+    inserts++;
+    if (inserts === 1) return { ok: false, status: 400, json: async () => ({ error: { code: "sqlite_error", message: "Constraint failed" } }) };
+    assert.equal(submit.disabled, true);
+    return { ok: true, status: 200, json: async () => ({ affectedRows: 1 }) };
+  });
+  await handleGridAction("add-row", {});
+  assert.equal(inserts, 0);
+  assert.equal(dialog.open, true);
+  assert.match(dialog.innerHTML, /name/);
+  assert.doesNotMatch(dialog.innerHTML, /generated|rowid/);
+  entries[0].mode.value = "value";
+  entries[0].mode.onchange();
+  assert.equal(entries[0].input.disabled, false);
+  assert.equal(entries[0].label.hidden, false);
+  entries[1].mode.value = "null";
+  await form.onsubmit({ preventDefault() {} });
+  assert.equal(dialog.open, true);
+  assert.equal(error.textContent, "Constraint failed");
+  assert.equal(entries[0].mode.value, "value");
+  assert.equal(submit.disabled, false);
+  await form.onsubmit({ preventDefault() {} });
+  assert.equal(dialog.open, false);
+  assert.equal(reloaded, 1);
+  assert.match(state.queryHistory[0].sql, /INSERT INTO main\."items" \("name", "optional"\) VALUES \('', NULL\)/);
+  tab.editable = false;
+  await handleGridAction("add-row", {});
+  assert.equal(dialog.open, false);
 });
 
 test("text cell editor inserts a newline with Alt+Enter and saves with Enter", context => {
