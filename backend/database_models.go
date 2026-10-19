@@ -5,20 +5,21 @@ import "errors"
 // Bentuk data ini dipakai bersama oleh PostgreSQL, MySQL/MariaDB, dan SQLite.
 
 type tableColumn struct {
-	Name               string  `json:"name"`
-	Type               string  `json:"type"`
-	Nullable           bool    `json:"nullable"`
-	Default            *string `json:"default"`
-	Key                string  `json:"key"`
-	Editable           bool    `json:"editable"`
-	DefinitionEditable bool    `json:"definitionEditable,omitempty"`
-	Collation          string  `json:"collation,omitempty"`
-	Comment            string  `json:"comment,omitempty"`
-	Affinity           string  `json:"affinity,omitempty"`
-	PrimaryOrder       int     `json:"primaryOrder,omitempty"`
-	Hidden             bool    `json:"hidden,omitempty"`
-	Generated          string  `json:"generated,omitempty"`
-	DefaultSource      string  `json:"defaultSource,omitempty"`
+	Name               string   `json:"name"`
+	Type               string   `json:"type"`
+	EnumValues         []string `json:"enumValues,omitempty"`
+	Nullable           bool     `json:"nullable"`
+	Default            *string  `json:"default"`
+	Key                string   `json:"key"`
+	Editable           bool     `json:"editable"`
+	DefinitionEditable bool     `json:"definitionEditable,omitempty"`
+	Collation          string   `json:"collation,omitempty"`
+	Comment            string   `json:"comment,omitempty"`
+	Affinity           string   `json:"affinity,omitempty"`
+	PrimaryOrder       int      `json:"primaryOrder,omitempty"`
+	Hidden             bool     `json:"hidden,omitempty"`
+	Generated          string   `json:"generated,omitempty"`
+	DefaultSource      string   `json:"defaultSource,omitempty"`
 }
 
 // Field khusus engine bersifat opsional agar respons halaman tetap satu bentuk JSON.

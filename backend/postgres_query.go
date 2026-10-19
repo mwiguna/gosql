@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // Query console menerima beberapa statement dan menampilkan hasil statement terakhir.
@@ -46,6 +48,8 @@ func (a *application) handlePostgresQuery(w http.ResponseWriter, r *http.Request
 			for i, value := range values {
 				if value == nil {
 					row[columns[i]] = nil
+				} else if fields[i].DataTypeOID == pgtype.BoolOID {
+					row[columns[i]] = string(value) == "t"
 				} else {
 					row[columns[i]] = string(value)
 				}

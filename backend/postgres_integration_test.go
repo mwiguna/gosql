@@ -278,6 +278,10 @@ func TestPostgresIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	ddl("POST", "/tables", map[string]any{"database": fields.Database, "schema": newSchema, "table": "enum_here", "columns": []map[string]any{{"name": "mood", "type": pgx.Identifier{newSchema, "mood"}.Sanitize(), "nullable": true}, {"name": "moods", "type": pgx.Identifier{newSchema, "mood"}.Sanitize() + "[]", "nullable": true}}}, 200)
+	enumPage, err := readPostgresPage(ctx, conn, newSchema, "enum_here", 1, 20, "", "")
+	if err != nil || len(enumPage.Columns) != 2 || !slices.Equal(enumPage.Columns[0].EnumValues, []string{"happy", "sad"}) || len(enumPage.Columns[1].EnumValues) != 0 {
+		t.Fatalf("enum choices must follow database order and exclude arrays: %+v, %v", enumPage.Columns, err)
+	}
 	ddl("POST", "/tables", map[string]any{"database": fields.Database, "schema": newSchema, "table": "defaults_here", "columns": []map[string]any{{"name": "id", "type": "bigserial", "primary": true}, {"name": "note", "type": "text", "nullable": true}}}, 200)
 	inserted := request(t, handler, "POST", path+"/rows/insert", `{"database":"`+fields.Database+`","schema":"`+newSchema+`","table":"defaults_here","values":{}}`, cookie, 200)
 	var insertedRow struct {

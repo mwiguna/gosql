@@ -174,7 +174,7 @@ function renderRemoteData(tab) {
             },
             editor: canEditRemoteCell(tab, index) ? cellEditor : false,
             editable: cell => Boolean(tab.versions[cell.getRow().getData()._row]),
-            formatter: cell => formatCellValue(cell.getValue())
+            formatter: cell => formatCellValue(cell.getValue(), column.type)
           })) ]
       });
       const mounted = grid;
@@ -457,7 +457,7 @@ function mountGrid() {
       width: field === "id" ? 65 : undefined,
       minWidth: field === "id" ? 65 : field === "email" ? 225 : field === "created_at" ? 175 : 140,
       editor: editable && field !== "id" ? cellEditor : false,
-      formatter: cell => formatCellValue(cell.getValue())
+      formatter: cell => formatCellValue(cell.getValue(), activeTab.result ? undefined : activeTab.schema.find(column => column.name === field)?.type)
     }))];
     grid = new Tabulator(wrap.firstElementChild, {
       height: "100%", autoResize: true, data: structuredClone(paged),
@@ -618,8 +618,13 @@ export function matchesGroup(row, group) {
 // -----------------------------------------------------------------------------
 // Cell editing
 // -----------------------------------------------------------------------------
-export function formatCellValue(value) {
+export function formatCellValue(value, type = "") {
   if (value === null) return '<span class="null-value">NULL</span>';
+  if (typeof value === "boolean" || /^(bool|boolean)$/i.test(type)) {
+    const boolean = String(value).toLowerCase();
+    if (["t", "true", "1"].includes(boolean)) return '<i>true</i>';
+    if (["f", "false", "0"].includes(boolean)) return '<i>false</i>';
+  }
   const preview = String(value);
   return escapeHtml(preview.length > 120 ? preview.slice(0, 120) + "..." : preview);
 }
@@ -630,25 +635,119 @@ export function cellEditor(cell, onRendered, success, cancel) {
   const column = tab.remote ? tab.schema[columnIndex] : tab.schema.find((item) => item.name === cell.getField());
   const rowIndex = tab.remote ? cell.getRow().getData()._row : -1;
   const needsFullValue = Boolean(tab.remote && tab.truncated?.[rowIndex]?.[columnIndex]);
-  const multiline = /TEXT|CHAR|CLOB|BYTEA|BLOB|JSON|XML/i.test(column?.type ?? "") || String(cell.getValue() ?? "").length > 120;
-  const input = document.createElement(multiline ? "textarea" : "input");
+  const type = (column?.type ?? "").toLowerCase().replace(/\(\d+(?:,\s*\d+)?\)/g, "").trim();
+  const scalar = !type.endsWith("[]");
+  const boolean = scalar && /^(bool|boolean)$/.test(type);
+  const enumValues = column?.enumValues || (/^enum\(/i.test(column?.type ?? "")
+    ? [...column.type.matchAll(/'((?:[^'\\]|\\.|'')*)'/gs)].map(match => match[1].replace(/''|\\(.)/gs, (escape, char) =>
+      escape === "''" ? "'" : ({ "0": "\0", b: "\b", n: "\n", r: "\r", t: "\t", Z: "\x1a" }[char] ?? char))) : []);
+  const choices = boolean ? ["true", "false"] : enumValues;
+  const integer = scalar && /^(tinyint|smallint|mediumint|int|integer|bigint|int2|int4|int8|smallserial|serial|bigserial|year)(\s|$)/.test(type);
+  const numeric = integer || scalar && /^(numeric|decimal|float|float4|float8|real|double|money|number)(\s|$)/.test(type);
+  const sign = /\bunsigned\b/.test(type) ? "\\+?" : "[+\\-]?";
+  const exponent = /^(float|float4|float8|real|double)(\s|$)/.test(type) ? "(?:[eE][+\\-]?\\d+)?" : "";
+  const numberPattern = new RegExp("^" + sign + (integer ? "\\d+" : "(?:\\d+(?:\\.\\d*)?|\\.\\d+)" + exponent) + "$");
+  const partialNumber = new RegExp("^" + sign + (integer ? "\\d*" : "(?:\\d*(?:\\.\\d*)?)" + exponent.replace("\\d+", "\\d*")) + "$");
+  let picker = scalar && /^(date|time|timestamp|datetime|timetz|timestamptz)(\s|$)/.test(type)
+    ? type === "date" ? "date" : /^(timestamp|datetime|timestamptz)/.test(type) ? "datetime-local" : "time" : "";
+  const multiline = !choices.length && !numeric && !picker && (/TEXT|CHAR|CLOB|BYTEA|BLOB|JSON|XML/i.test(type) || String(cell.getValue() ?? "").length > 120);
+  const input = document.createElement(choices.length ? "select" : multiline ? "textarea" : "input");
   if (multiline) input.className = "multiline-cell-editor";
   input.style?.setProperty("background", "#fff", "important");
   let original = cell.getValue() ?? "";
-  input.value = needsFullValue ? "Loading full value…" : original;
+  if (choices.length) {
+    for (const value of choices) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value || "(empty)";
+      input.append(option);
+    }
+  } else if (!multiline) input.type = picker || "text";
+  let suffix = "";
+  let initialValue;
+  const setValue = value => {
+    let display = String(value);
+    if (choices.length) {
+      if (cell.getValue() === null && value === "") display = "\u0000";
+      else if (boolean) display = ["t", "true", "1"].includes(display.toLowerCase()) ? "true" : ["f", "false", "0"].includes(display.toLowerCase()) ? "false" : "\u0000";
+    } else if (picker && picker !== "date") {
+      const parts = display.match(/^(?:(\d{4,}-\d{2}-\d{2})[ T])?(\d{2}:\d{2}(?::\d{2})?)(\.\d+)?(Z|[+-]\d{2}(?::?\d{2})?(?::?\d{2})?)?$/);
+      if (parts) {
+        display = (parts[1] ? parts[1] + "T" : "") + parts[2];
+        suffix = (parts[3] || "") + (parts[4] || "");
+      }
+    }
+    if (picker) input.step = "1";
+    input.value = display;
+    // Native pickers cannot represent infinity, zero dates, or MySQL TIME durations.
+    if (picker && display && !input.value) {
+      input.type = "text";
+      input.value = String(value);
+      picker = "";
+      suffix = "";
+    }
+    initialValue = choices.length && input.selectedIndex === -1 ? null : input.value;
+  };
+  setValue(original);
+  if (numeric) {
+    input.inputMode = integer ? "numeric" : "decimal";
+    input.pattern = numberPattern.source;
+    input.required = true;
+    let previous = input.value;
+    input.addEventListener("input", () => {
+      if (partialNumber.test(input.value)) previous = input.value;
+      else input.value = previous;
+    });
+    input.addEventListener("beforeinput", event => {
+      if (event.data === null || event.isComposing) return;
+      const next = input.value.slice(0, input.selectionStart) + event.data + input.value.slice(input.selectionEnd);
+      if (!partialNumber.test(next)) event.preventDefault();
+    });
+  }
+  if (needsFullValue) input.value = "Loading full value…";
   input.disabled = needsFullValue;
-  input.setAttribute("aria-label", column?.name + (multiline ? " — Alt+Enter for a new line" : " — Enter to save"));
+  input.setAttribute("aria-label", column?.name + (multiline ? " — Alt+Enter for a new line" : choices.length || picker ? " — Saves on selection" : " — Enter to save"));
+  let editor = input;
+  if (suffix) {
+    editor = document.createElement("div");
+    editor.className = "temporal-cell-editor";
+    const preserved = document.createElement("span");
+    preserved.textContent = suffix;
+    preserved.title = "Fractional seconds and time zone are preserved";
+    editor.append(input, preserved);
+  }
   let finished = false;
   const finish = (save) => {
-    if (finished) return;
+    if (finished) return true;
+    if (save && input.disabled) return false;
+    if (save && input.value !== initialValue) {
+      const invalid = numeric && !numberPattern.test(input.value) || choices.length && (input.selectedIndex === -1 || !choices.includes(input.value)) || picker && !input.value;
+      if (invalid || input.checkValidity?.() === false) {
+        input.reportValidity?.();
+        return false;
+      }
+    }
     finished = true;
-    if (save && input.value !== String(original)) success(input.value);
-    else cancel();
+    if (!save || input.value === initialValue) { cancel(); return true; }
+    let value = input.value;
+    if (picker && picker !== "date") {
+      if (/(?:^|T)\d{2}:\d{2}$/.test(value)) value += ":00";
+      value = value.replace("T", " ") + suffix;
+    }
+    if (boolean && getConnectionById(tab.connectionId)?.engine === "SQLite") value = value === "true" ? "1" : "0";
+    success(value);
+    return true;
+  };
+  const focus = () => {
+    input.focus({ preventScroll: true });
+    if (multiline || input.type === "text") input.select?.();
+    if (choices.length || picker) {
+      try { input.showPicker?.(); } catch { /* Browser may require a separate click. */ }
+    }
   };
   onRendered(() => {
     if (!needsFullValue) {
-      input.focus({ preventScroll: true });
-      input.select();
+      focus();
       return;
     }
     apiRequest("/connections/" + encodeURIComponent(tab.connectionId) + "/rows/cell", {
@@ -656,10 +755,9 @@ export function cellEditor(cell, onRendered, success, cancel) {
     }).then(result => {
       if (finished) return;
       original = result.value ?? "";
-      input.value = original;
+      setValue(original);
       input.disabled = false;
-      input.focus({ preventScroll: true });
-      input.select();
+      focus();
     }).catch(error => { if (!finished) { finish(false); toast(error.message); } });
   });
   input.addEventListener("keydown", (event) => {
@@ -668,6 +766,7 @@ export function cellEditor(cell, onRendered, success, cancel) {
       event.preventDefault();
       input.setRangeText("\n", input.selectionStart, input.selectionEnd, "end");
     } else if (event.key === "Enter") {
+      if (choices.length) return;
       event.preventDefault();
       finish(true);
     } else if (event.key === "Escape") {
@@ -675,13 +774,15 @@ export function cellEditor(cell, onRendered, success, cancel) {
       finish(false);
     } else if (event.key === "Tab") {
       event.preventDefault();
-      finish(true);
-      if (event.shiftKey) cell.navigatePrev();
-      else cell.navigateNext();
+      if (finish(true)) {
+        if (event.shiftKey) cell.navigatePrev();
+        else cell.navigateNext();
+      }
     }
   });
   input.addEventListener("blur", () => finish(false));
-  return input;
+  if (choices.length || picker) input.addEventListener("change", () => finish(true));
+  return editor;
 }
 
 export function getCellMenuActions(column, editable) {

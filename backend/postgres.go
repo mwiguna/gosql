@@ -554,7 +554,8 @@ func readPostgresPage(ctx context.Context, conn *pgx.Conn, schema, table string,
 	result.CursorPaging = len(meta.PrimaryKey) > 0
 	columns, err := conn.Query(ctx, `SELECT a.attname, pg_catalog.format_type(a.atttypid,a.atttypmod), NOT a.attnotnull,
 		pg_catalog.pg_get_expr(d.adbin,d.adrelid),
-		(a.attgenerated = '' AND a.attidentity = '' AND pg_catalog.has_column_privilege(c.oid,a.attname,'UPDATE'))
+		(a.attgenerated = '' AND a.attidentity = '' AND pg_catalog.has_column_privilege(c.oid,a.attname,'UPDATE')),
+		ARRAY(SELECT e.enumlabel::text FROM pg_catalog.pg_enum e WHERE e.enumtypid=a.atttypid ORDER BY e.enumsortorder)
 		FROM pg_catalog.pg_attribute a
 		JOIN pg_catalog.pg_class c ON c.oid=a.attrelid
 		JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
@@ -567,7 +568,7 @@ func readPostgresPage(ctx context.Context, conn *pgx.Conn, schema, table string,
 	var order []string
 	for columns.Next() {
 		var column tableColumn
-		if err := columns.Scan(&column.Name, &column.Type, &column.Nullable, &column.Default, &column.Editable); err != nil {
+		if err := columns.Scan(&column.Name, &column.Type, &column.Nullable, &column.Default, &column.Editable, &column.EnumValues); err != nil {
 			columns.Close()
 			return result, err
 		}
