@@ -63,6 +63,22 @@ GoSQL creates a `data` folder next to the executable for your account, connectio
 
 > **Working with SQLite?** If you enter a path, use the absolute path to a file **on the machine running GoSQL (the server)**. When you access GoSQL from another computer, a path to a file on your own computer will not work. GoSQL edits the server file directly; choose **Upload Copy** if your file is only on your computer or you'd rather work on a separate copy.
 
+## Export and import
+
+Right-click a database or table in the sidebar and choose **Export** or **Import File**. Exports include all rows, regardless of the current page or sorting.
+
+| Engine | Database backup | Table data |
+| --- | --- | --- |
+| PostgreSQL | `.sql` script (default) or `.dump` archive, with structure and data | `.sql` / `.dump` export or CSV export/import |
+| MySQL / MariaDB | `.sql` dump with structure and data | `.sql` export or CSV export/import |
+| SQLite | Consistent `.sqlite` snapshot and full restore | CSV export/import |
+
+Restore a table archive or SQL table dump from its **database** menu. PostgreSQL restores should target an empty database; SQLite restore replaces the selected database's contents. SQL imports execute the supplied script; MySQL/MariaDB schema changes may remain applied if a later statement fails.
+
+PostgreSQL SQL scripts use [`pg_dump` and `psql`](https://www.postgresql.org/docs/current/app-pgdump.html); custom `.dump` archives use `pg_restore`. SQL import requires a client with `\restrict` support (PostgreSQL 18 or an updated older release). MySQL uses [`mysqldump` and `mysql`](https://dev.mysql.com/doc/refman/8.4/en/mysqldump.html); MariaDB uses [`mariadb-dump` and `mariadb`](https://mariadb.com/docs/server/clients-and-utilities/backup-restore-and-import-clients/mariadb-dump). Install compatible client tools on the machine running GoSQL and add their `bin` folder to `PATH`. SQLite backups and CSV transfers need no extra tools.
+
+Imports accept one file up to **256 MB**. CSV uses a header row matching destination column names and appends rows; omitted columns use defaults and generated columns are excluded. `\N` means NULL, literal backslashes are doubled, and binary values use `\x` followed by hexadecimal digits. Use the same engine when restoring native backups.
+
 ## Build it yourself
 
 You'll need **Go 1.27.1 or newer**, plus **Node.js and npm**. From the project root, run:

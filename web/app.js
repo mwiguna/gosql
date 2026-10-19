@@ -52,7 +52,7 @@ function handleAppAction(action, element) {
         <div class="row between"><span>Cell value / copy</span><span class="muted">Right-click</span></div>
         <div class="row between"><span>Edit cell</span><span class="muted">Double-click · Enter to save</span></div>
         <div class="row between"><span>New line in text cell</span><span class="muted">Alt+Enter</span></div>
-        <p class="hint">Double-click a writable table cell to edit it. Views stay read-only. Query execution is not available yet.</p>
+        <p class="hint">Double-click a writable table cell to edit it. Views stay read-only. Right-click a database or table to export or import files.</p>
       </div>`, button("close-dialog", "Got it", "", "primary"));
       break;
     default:
@@ -96,15 +96,15 @@ function openNavigationMenu(element, x, y) {
     const protectedMySQL = ["MySQL", "MariaDB"].includes(connection?.engine) && ["mysql", "information_schema", "performance_schema", "sys"].includes(database.toLowerCase());
     const virtualSQLite = connection?.engine === "SQLite" && getConnectionCatalog(id, database)?.virtualTables?.includes(table);
     if (!protectedMySQL && !virtualSQLite) add("rename-table", ["MySQL", "MariaDB"].includes(connection?.engine) ? "Edit Table" : "Rename Table", attributes);
-    if (connection?.engine !== "SQLite" || connection.location === "Server upload") add("database-export", connection?.engine === "SQLite" ? "Download SQLite File" : "Export Table", attributes);
-    if (connection?.engine !== "SQLite") add("database-import", "Import File", attributes);
+    add("database-export", "Export Table", attributes);
+    if (!protectedMySQL && !virtualSQLite) add("database-import", "Import File", attributes);
     if (!protectedMySQL && !virtualSQLite) add("delete-table", "Delete Table", attributes);
   } else if (action === "database") {
     const attributes = `data-id="${escapeHtml(id)}" data-db="${escapeHtml(database)}"`;
     add("saved", "Saved Queries", attributes);
     add("refresh-database", "Refresh Objects", attributes);
-    if (connection?.engine !== "SQLite" || connection.location === "Server upload") add("database-export", connection?.engine === "SQLite" ? "Download SQLite File" : "Export Database", attributes);
-    if (connection?.engine !== "SQLite") add("database-import", "Import File", attributes);
+    add("database-export", "Export Database", attributes);
+    if (!["MySQL", "MariaDB"].includes(connection?.engine) || !["mysql", "information_schema", "performance_schema", "sys"].includes(database.toLowerCase())) add("database-import", "Import File", attributes);
     if (["PostgreSQL", "MySQL", "MariaDB", "SQLite"].includes(connection?.engine)) {
       if (connection.engine === "SQLite") add("create-table", "Create Table", attributes);
       if (["MySQL", "MariaDB"].includes(connection.engine) && !["mysql", "information_schema", "performance_schema", "sys"].includes(database.toLowerCase())) {

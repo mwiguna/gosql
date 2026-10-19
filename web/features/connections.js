@@ -4,7 +4,8 @@ import {
   showDialog, toast
 } from "../ui.js";
 import { setConnected } from "./session.js";
-import { apiRequest, connectionFromProfile, uploadSQLite, downloadSQLite } from "../api.js";
+import { apiRequest, connectionFromProfile, uploadSQLite } from "../api.js";
+import { openTransferDialog } from "./transfers.js";
 import { runRecordedSQL } from "../storage.js";
 import { columnTypes, columnTypeSQL, lengthTypes, numericTypes, mysqlTypeFields, mysqlTypeSQL, mysqlUnsignedField, updateMySQLTypeFields } from "./column_types.js";
 
@@ -742,15 +743,22 @@ export function connectToDatabase(id, callback) {
   };
 }
 
-export function exportPreview(id) {
-  const connection = getConnectionById(id);
-  if (connection?.engine === "SQLite" && connection.location === "Server upload") {
-    downloadSQLite(id, connection.file).catch(error => toast(error.message));
-    return;
-  }
-  toast("Database export is not available yet.");
+function transferDialog(id, database, schema = "", table = "", importing = false) {
+  connectToDatabase(id, async () => {
+    try {
+      const catalog = await loadDatabaseCatalog(id, database);
+      if (!catalog) return;
+      openTransferDialog(getConnectionById(id), database, schema, table, catalog, importing, async () => {
+        await refreshDatabaseCatalog(id, database);
+        for (const tab of state.tabs) if (tab.connectionId === id && tab.db === database && !tab.queryTab) {
+          tab.overviewLoaded = false;
+          if (!tab.overview) { tab.result = null; tab.needsReload = true; }
+        }
+        onWorkspaceChange();
+      });
+    } catch (error) { toast(error.message); }
+  });
 }
-export function importDialog() { toast("Database import is not available yet."); }
 
 function columnRow(column = { name: "", type: "text", nullable: true, primary: false }, customTypes = []) {
   return `<div class="table-column-row">
@@ -1445,10 +1453,10 @@ export function handleConnectionsAction(action, element) {
       deleteDatabase(id, element.dataset.db);
       break;
     case "database-export":
-      exportPreview(id, element.dataset.db);
+      transferDialog(id, element.dataset.db, element.dataset.schema, element.dataset.table);
       break;
     case "database-import":
-      importDialog(id, element.dataset.db);
+      transferDialog(id, element.dataset.db, element.dataset.schema, element.dataset.table, true);
       break;
     default:
       return false;

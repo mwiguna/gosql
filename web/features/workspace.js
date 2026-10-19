@@ -202,6 +202,7 @@ export function renderWorkspace() {
     renderOverview(tab);
     if (!tab.overviewLoaded && !tab.loading) loadDatabaseOverview(tab);
   } else renderData();
+  if (!tab.overview && tab.needsReload) { tab.needsReload = false; loadTablePage(tab, 1, true); }
   syncTreeSelection();
   const closeAll = findElement('[data-action="close-all-tabs"]');
   closeAllTooltip = document.createElement("div");

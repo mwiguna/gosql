@@ -34,18 +34,35 @@ export async function apiRequest(path, { method = "GET", body, signal } = {}) {
   }
 }
 
-export async function uploadSQLite(path, file) {
+export async function uploadFile(path, file) {
   const body = new FormData();
   body.append("file", file);
   const response = await fetch("/api" + path, { method: "POST", body, credentials: "same-origin", cache: "no-store" });
   const data = await response.json();
   if (response.status === 401) onUnauthorized?.();
   if (!response.ok) {
-    const error = new Error(data?.error?.message || "SQLite upload failed.");
+    const error = new Error(data?.error?.message || "File upload failed.");
     error.code = data?.error?.code;
     throw error;
   }
   return data;
+}
+
+export { uploadFile as uploadSQLite };
+
+export async function downloadFile(path, filename) {
+  const response = await fetch("/api" + path, { credentials: "same-origin", cache: "no-store" });
+  if (!response.ok) {
+    if (response.status === 401) onUnauthorized?.();
+    const data = await response.json();
+    throw new Error(data?.error?.message || "Export failed.");
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 export async function downloadSQLite(id, filename) {

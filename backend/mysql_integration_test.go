@@ -65,6 +65,33 @@ func TestMySQLIntegration(t *testing.T) {
 	if len(page.Rows) != 1 || len(page.Versions) != 1 || len(page.Versions[0]) != 64 || !page.Editable || !page.CursorPaging {
 		t.Fatalf("unexpected MySQL page metadata: %+v", page)
 	}
+	t.Run("CSV round trip", func(t *testing.T) {
+		clone := name + "_csv"
+		if _, err := conn.ExecContext(ctx, "CREATE TABLE "+mysqlTableName(config.DBName, clone)+" LIKE "+table); err != nil {
+			t.Fatal(err)
+		}
+		defer conn.ExecContext(context.Background(), "DROP TABLE "+mysqlTableName(config.DBName, clone))
+		file, err := os.CreateTemp(t.TempDir(), "csv-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		target := transferTarget{Database: config.DBName, Table: name, Format: "csv"}
+		if _, err := sqlCSV(ctx, conn, "MySQL", target, file, false); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Seek(0, 0); err != nil {
+			t.Fatal(err)
+		}
+		target.Table = clone
+		if count, err := sqlCSV(ctx, conn, "MySQL", target, file, true); err != nil || count != 1 {
+			t.Fatalf("CSV import: %d %v", count, err)
+		}
+		var amount, note, binary string
+		if err := conn.QueryRowContext(ctx, "SELECT amount,note,HEX(bytes) FROM "+mysqlTableName(config.DBName, clone)).Scan(&amount, &note, &binary); err != nil || amount != "9007199254740993.1234567890" || note != strings.Repeat("a", 600) || binary != "00FF" {
+			t.Fatalf("CSV changed data: %s %s %s %v", amount, note, binary, err)
+		}
+	})
 	var amount, blob, date *string
 	for i, column := range page.Columns {
 		switch column.Name {
