@@ -42,6 +42,7 @@ type tablePage struct {
 	CursorPaging       bool              `json:"cursorPaging"`
 	NextCursor         string            `json:"nextCursor,omitempty"`
 	TotalRows          *int64            `json:"totalRows,omitempty"`
+	SizeBytes          *int64            `json:"sizeBytes,omitempty"`
 	Duration           int64             `json:"duration"`
 }
 

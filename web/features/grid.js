@@ -4,6 +4,7 @@ import {
   showDialog, toast
 } from "../ui.js";
 import { renderStructure } from "./schema.js";
+import { formatTableSize } from "./overview.js";
 import { apiRequest } from "../api.js";
 import { runRecordedSQL } from "../storage.js";
 
@@ -132,6 +133,8 @@ function renderRemoteData(tab) {
     area.innerHTML = `<div class="toolbar">
       <span id="remote-status" role="status" class="grow"></span>
       ${button("reconnect-table", "Reconnect", "database", "", 'id="reconnect-table" hidden')}
+      ${button("sort", "Sort", "sort")}
+      ${button("clear-sort", "Clear sort", "x", "ghost", 'id="clear-sort" hidden')}
       ${iconButton("add-row", "Add row", "plus", 'id="remote-add-row"')}
       ${iconButton("refresh-table", "Refresh table", "refresh")}
       ${button("delete-rows", "Delete", "trash", "danger", 'id="delete-selected" disabled')}
@@ -140,6 +143,8 @@ function renderRemoteData(tab) {
   const readOnlyReason = tab.readOnlyReason || "Editing requires a primary key and write access.";
   findElement("#remote-status").textContent = tab.loading ? "Loading table…" : tab.loadError || (tab.editable ? "Double-click a cell to edit · Select rows to delete" : `Read-only data: ${readOnlyReason}${tab.rows.length ? "" : " This page has no rows."}`);
   findElement("#remote-status").classList.toggle("error-text", Boolean(tab.loadError));
+  const clearSort = findElement("#clear-sort");
+  if (clearSort) { clearSort.hidden = !tab.sorts?.length; clearSort.disabled = tab.loading; }
   findElement("#reconnect-table").hidden = !tab.connectionRequired;
   findElement("#delete-selected").hidden = !tab.editable;
   findElement("#remote-add-row").hidden = Boolean(tab.queryTab || tab.isView || tab.result);
@@ -163,6 +168,10 @@ function renderRemoteData(tab) {
         columns: [ ...(tab.editable ? [{ title: "", field: "_select", formatter: "rowSelection", titleFormatter: "rowSelection", width: 42, minWidth: 42, resizable: false, cellClick: (event, cell) => cell.getRow().toggleSelect() }] : []),
           ...tab.schema.map((column, index) => ({
             title: escapeHtml(column.name), field: "c" + index,
+            titleFormatter: () => columnSortTitle(tab.sorts || [], column.name),
+            headerClick: () => {
+              if (!tab.loading) applyRemoteSort(tab, toggleColumnSort(tab.sorts || [], column.name));
+            },
             editor: canEditRemoteCell(tab, index) ? cellEditor : false,
             editable: cell => Boolean(tab.versions[cell.getRow().getData()._row]),
             formatter: cell => formatCellValue(cell.getValue())
@@ -192,6 +201,12 @@ function renderRemoteData(tab) {
     gridFields = key;
     gridSource = tab.rows;
   }
+  if (grid && gridReady && gridTabId === tab.id) {
+    tab.schema.forEach((column, index) => {
+      const title = grid.getColumn("c" + index)?.getElement()?.querySelector(".tabulator-col-title");
+      if (title) title.innerHTML = columnSortTitle(tab.sorts || [], column.name);
+    });
+  }
   const disabled = tab.loading ? "disabled" : "";
   const pages = tab.totalRows === null || tab.totalRows === undefined ? null : Math.max(1, Math.ceil(tab.totalRows / tab.pageSize));
   const firstRow = tab.rows.length ? (tab.page - 1) * tab.pageSize + 1 : 0;
@@ -205,7 +220,8 @@ function renderRemoteData(tab) {
   ).join("");
   findElement("#pagination").innerHTML = `<select id="page-size" aria-label="Rows per page" ${disabled}>
     ${[20, 50, 100].map(size => `<option ${size === tab.pageSize ? "selected" : ""}>${size}</option>`).join("")}
-    </select><span class="page-label">rows per page</span><span class="row-count">· ${firstRow}–${lastRow}${pages === null ? "" : ` of ${tab.totalRows}`}</span><span class="spacer"></span>
+    </select><span class="page-label">rows per page</span><span class="row-count">· ${firstRow}–${lastRow}${pages === null ? "" : ` of ${tab.totalRows}`}</span>
+    <span class="table-size" title="Table data and indexes">· Table size: ${tab.loading && !tab.sizeLoaded ? "…" : formatTableSize(tab.sizeBytes)}</span><span class="spacer"></span>
     ${button("page-prev", "", "chevron", "", `aria-label="Previous page" style="transform:rotate(180deg)" ${disabled} ${tab.page <= 1 ? "disabled" : ""}`)}
     ${pageButtons}
     ${button("page-next", "", "chevron", "", `aria-label="Next page" ${disabled} ${tab.cursorPaging || pages === null ? !tab.hasMore ? "disabled" : "" : tab.page >= pages ? "disabled" : ""}`)}
@@ -408,12 +424,7 @@ function mountGrid() {
   const fields = activeTab.result?.columns || Object.keys(source[0] ?? Object.fromEntries(activeTab.schema.map((column) => [column.name, null])));
   const editable = !activeTab.result && !activeTab.queryTab && !activeTab.isView;
   const fieldKey = fields.join("\0");
-  const columnTitle = (field) => {
-    const priority = activeTab.sorts.findIndex((sort) => sort.field === field);
-    if (priority < 0) return escapeHtml(field);
-    const arrow = activeTab.sorts[priority].dir === "asc" ? "↑" : "↓";
-    return `${escapeHtml(field)}<span class="sort-priority">${priority + 1} ${arrow}</span>`;
-  };
+  const columnTitle = field => columnSortTitle(activeTab.sorts, field);
   // Pertahankan instance selama tab, kolom, dan kemampuan edit belum berubah.
   if (grid && gridReady && gridTabId === activeTab.id && gridFields === fieldKey && gridEditable === editable) {
     grid.deselectRow();
@@ -570,6 +581,20 @@ export function toggleColumnSort(sorts, field) {
   if (index === -1) return [...sorts, { field, dir: "asc" }];
   if (sorts[index].dir === "desc") return sorts.filter((_, itemIndex) => itemIndex !== index);
   return sorts.map((sort, itemIndex) => itemIndex === index ? { ...sort, dir: "desc" } : sort);
+}
+
+export function columnSortTitle(sorts, field) {
+  const priority = sorts.findIndex(sort => sort.field === field);
+  if (priority < 0) return escapeHtml(field);
+  return `${escapeHtml(field)}<span class="sort-priority">${priority + 1} ${sorts[priority].dir === "asc" ? "↑" : "↓"}</span>`;
+}
+
+export function applyRemoteSort(tab, sorts) {
+  tab.sorts = sorts;
+  tab.page = 1;
+  tab.pageCursors = { 1: "" };
+  tab.cursorPaging = false;
+  onLoadTablePage(tab, 1);
 }
 
 export function matchesGroup(row, group) {
@@ -776,11 +801,11 @@ function renderFilterForm() {
 
 function openSortDialog() {
   const activeTab = getActiveTab();
-  let sorts = structuredClone(activeTab.sorts.length ? activeTab.sorts : [{ field: "id", dir: "asc" }]);
+  let sorts = structuredClone(activeTab.sorts.length ? activeTab.sorts : [{ field: activeTab.schema[0]?.name || "id", dir: "asc" }]);
   const draw = () => {
     const rules = sorts.map((sort, index) => {
       const columns = activeTab.schema.map((column) =>
-        `<option ${sort.field === column.name ? "selected" : ""}>${escapeHtml(column.name)}</option>`
+        `<option value="${escapeHtml(column.name)}" ${sort.field === column.name ? "selected" : ""}>${escapeHtml(column.name)}</option>`
       ).join("");
       return `<div class="row">
         <select data-sort-index="${index}" data-sort-field="field"
@@ -812,7 +837,8 @@ function openSortDialog() {
       activeTab.sorts = sorts;
       activeTab.page = 1;
       closeDialog();
-      mountGrid();
+      if (activeTab.remote && !activeTab.queryTab && !activeTab.result) applyRemoteSort(activeTab, sorts);
+      else mountGrid();
     };
   };
   draw();
@@ -867,7 +893,15 @@ export async function handleGridAction(action, element) {
       }
       return true;
     }
-    if (["filters", "sort"].includes(action)) {
+    if (action === "sort") {
+      if (!activeTab.loading) openSortDialog();
+      return true;
+    }
+    if (action === "clear-sort") {
+      if (!activeTab.loading) applyRemoteSort(activeTab, []);
+      return true;
+    }
+    if (action === "filters") {
       toast("This action is not available for remote tables yet.");
       return true;
     }

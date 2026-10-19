@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { getFilteredRows, matchesGroup, pageNumbers, renderData, toggleColumnSort } from "../features/grid.js";
+import { applyRemoteSort, columnSortTitle, getFilteredRows, initializeGrid, matchesGroup, pageNumbers, renderData, toggleColumnSort } from "../features/grid.js";
 import { state } from "../state.js";
 
 const rows = [
@@ -42,6 +42,22 @@ test("column sorting cycles ascending, descending, removed without disturbing ot
   assert.equal(original.length, 1);
 });
 
+test("sorting a database column resets pagination and keeps row identities intact", context => {
+  const tab = { page: 4, cursorPaging: true, pageCursors: { 1: "", 4: "old" }, rows: [["1", "two"], ["2", "one"]], versions: ["a", "b"] };
+  const before = structuredClone(tab.rows);
+  let loaded;
+  initializeGrid({ onLoadTablePage: (current, page) => { loaded = [current, page]; } });
+  context.after(() => initializeGrid({}));
+  applyRemoteSort(tab, [{ field: "name", dir: "desc" }]);
+  assert.deepEqual(loaded, [tab, 1]);
+  assert.equal(tab.cursorPaging, false);
+  assert.deepEqual(tab.pageCursors, { 1: "" });
+  assert.deepEqual(tab.rows, before);
+  assert.deepEqual(tab.versions, ["a", "b"]);
+  assert.equal(columnSortTitle(tab.sorts, "name"), 'name<span class="sort-priority">1 ↓</span>');
+  assert.equal(columnSortTitle(tab.sorts, "<other>"), "&lt;other&gt;");
+});
+
 test("pagination keeps first and last page visible", () => {
   assert.deepEqual(pageNumbers(1, 1), [1]);
   assert.deepEqual(pageNumbers(5, 10), [1, "…", 3, 4, 5, 6, 7, "…", 10]);
@@ -64,4 +80,12 @@ test("cursor pagination renders the current page at button size", context => {
   renderData();
   assert.match(pagination.innerHTML, /class="page-current" aria-current="page">2<\/span>/);
   assert.doesNotMatch(pagination.innerHTML, /class="pill">2<\/span>/);
+  assert.match(pagination.innerHTML, /Table size: …/);
+  state.tabs[0].sizeBytes = 2048;
+  state.tabs[0].sizeLoaded = true;
+  renderData();
+  assert.match(pagination.innerHTML, /Table size: 2 KB/);
+  state.tabs[0].sizeBytes = null;
+  renderData();
+  assert.match(pagination.innerHTML, /Table size: —/);
 });

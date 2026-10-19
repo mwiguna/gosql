@@ -1,7 +1,7 @@
 import { getActiveTab, getConnectionById, state, engines } from "../state.js";
 import {
   bindConnectionSearch, connectToDatabase, getConnectionSearch, renderTree, resetConnectionTree,
-  revealTreeDestination, syncTreeSelection, loadDatabaseCatalog
+  revealTreeDestination, syncTreeSelection, loadDatabaseCatalog, refreshDatabaseCatalog
 } from "./connections.js";
 import {
   findElement, findElements, brand, button, closeDialog, engineIcon, escapeHtml, icon, iconButton,
@@ -10,6 +10,7 @@ import {
 import { apiRequest } from "../api.js";
 import { destroyEditor, mountEditor, handleEditorAction } from "./editor.js";
 import { destroyGrid, renderData } from "./grid.js";
+import { renderOverview } from "./overview.js";
 
 // -----------------------------------------------------------------------------
 // Navigation state
@@ -138,7 +139,7 @@ export function renderWorkspace() {
   const tabButtons = state.tabs.map((item) => `<div class="workspace-tab ${item.id === tab.id ? "active" : ""}"
       role="tab" tabindex="0" aria-selected="${item.id === tab.id}"
       data-action="switch-tab" data-id="${item.id}">
-      ${icon(item.queryTab ? "terminal" : "table")}
+      ${icon(item.overview ? "database" : item.queryTab ? "terminal" : "table")}
       <span>${escapeHtml(item.title)}</span>
       ${iconButton("close-tab", "Close " + item.title, "x", `data-id="${item.id}"`)}
     </div>`).join("");
@@ -146,7 +147,7 @@ export function renderWorkspace() {
     ${engineIcon(connection.engine)}<strong>${escapeHtml(connection.name)}</strong>
     ${icon("chevron")}<span>${escapeHtml(tab.db)}</span>
     ${connection.engine === "PostgreSQL" ? icon("chevron") + "<span>" + escapeHtml(tab.schemaName) + "</span>" : ""}
-    ${icon("chevron")}<strong>${escapeHtml(tab.title)}</strong>
+    ${tab.overview ? "" : icon("chevron") + `<strong>${escapeHtml(tab.title)}</strong>`}
     <span class="spacer"></span>
     <span class="connection-meta">${connection.engine === "SQLite" ? escapeHtml(connection.file) : escapeHtml(connection.host) + ":" + escapeHtml(connection.port)}</span>
   </div>`;
@@ -175,7 +176,7 @@ export function renderWorkspace() {
     ${editorMarkup}
   </section>`;
   const views = ["Data", "Structure", "Indexes", "Constraints"];
-  const viewTabs = tab.queryTab ? "" : `<nav class="subtabs">${views.map((view) =>
+  const viewTabs = tab.queryTab || tab.overview ? "" : `<nav class="subtabs">${views.map((view) =>
     button("view", view + (view === "Structure" ? ` <span>${tab.schema.length}</span>` : ""),
       "", tab.view === view ? "active" : "", `data-view="${view}"`)
   ).join("")}</nav>`;
@@ -183,13 +184,16 @@ export function renderWorkspace() {
 
   workspace.innerHTML = `<div class="workspace-tabs" role="tablist">
     ${tabButtons}${iconButton("new-query", "New query tab", "plus")}${button("close-all-tabs", "", "x", "icon ghost", 'aria-label="Close all tabs"')}
-  </div>${breadcrumb}${consoleMarkup}${viewTabs}
+  </div>${breadcrumb}${tab.overview ? "" : consoleMarkup}${viewTabs}
   <section class="data-area" id="data-area"></section>
-  <div class="table-note">${icon("info")}<span>${note}</span></div>`;
+  <div class="table-note">${icon("info")}<span>${tab.overview ? "≈ Estimated rows from database statistics. — Statistics unavailable. Sizes include indexes; partitioned and virtual table sizes may be unavailable." : note}</span></div>`;
 
-  findElement("#query-template").onchange = event => handleEditorAction("query-template", event.target, onRunQuery);
+  if (!tab.overview) findElement("#query-template").onchange = event => handleEditorAction("query-template", event.target, onRunQuery);
   if (tab.consoleOpen) mountEditor(tab, connection, onRunQuery);
-  renderData();
+  if (tab.overview) {
+    renderOverview(tab);
+    if (!tab.overviewLoaded && !tab.loading) loadDatabaseOverview(tab);
+  } else renderData();
   syncTreeSelection();
   const closeAll = findElement('[data-action="close-all-tabs"]');
   closeAllTooltip = document.createElement("div");
@@ -245,6 +249,46 @@ export function openTable(connectionId, db, table, isView = false, schemaName = 
   findElement(".sidebar")?.classList.remove("open");
 }
 
+export function openDatabaseOverview(connectionId, db, schemaName = "") {
+  let tab = state.tabs.find(tab => tab.overview && tab.connectionId === connectionId && tab.db === db && tab.schemaName === schemaName);
+  if (!tab) {
+    if (state.tabs.length >= MAX_WORKSPACE_TABS) return toast("Close a tab before opening another. Limit: 30 tabs.");
+    tab = { ...createWorkspaceTab(connectionId, db, null, false, schemaName), overview: true, title: schemaName || db, loading: false };
+    state.tabs.push(tab);
+  }
+  state.activeTabId = tab.id;
+  tab.overviewLoaded = false;
+  renderAppShell();
+  findElement(".sidebar")?.classList.remove("open");
+}
+
+export async function loadDatabaseOverview(tab) {
+  tableRequests.get(tab.id)?.abort();
+  const controller = new AbortController();
+  tableRequests.set(tab.id, controller);
+  const userId = state.currentUser?.id;
+  tab.loading = true;
+  tab.loadError = "";
+  if (state.activeTabId === tab.id) renderOverview(tab);
+  try {
+    const params = new URLSearchParams({ database: tab.db, schema: tab.schemaName });
+    const tables = await apiRequest(`/connections/${encodeURIComponent(tab.connectionId)}/overview?${params}`, { signal: controller.signal });
+    if (controller.signal.aborted || state.currentUser?.id !== userId || !state.tabs.includes(tab)) return;
+    tab.tables = tables;
+  } catch (error) {
+    if (controller.signal.aborted || state.currentUser?.id !== userId || !state.tabs.includes(tab)) return;
+    tab.loadError = error.message;
+    if (error.code === "connection_required") { state.connectedConnectionIds.delete(tab.connectionId); renderTree(); }
+  } finally {
+    if (tableRequests.get(tab.id) === controller) {
+      tableRequests.delete(tab.id);
+      tab.loading = false;
+      tab.overviewLoaded = true;
+      if (state.currentUser?.id === userId && state.activeTabId === tab.id && state.tabs.includes(tab)) renderOverview(tab);
+    }
+  }
+}
+
 export async function loadTablePage(tab, page = tab.page, recount = false) {
   if (tab.cursorPaging && page > 1 && !tab.pageCursors?.[page]) {
     tab.loadError = "Page cursor is unavailable. Return to the first page.";
@@ -264,10 +308,14 @@ export async function loadTablePage(tab, page = tab.page, recount = false) {
     tab.countLoaded = false;
     tab.totalRows = null;
     tab.countError = "";
+    tab.sizeLoaded = false;
   }
   if (state.activeTabId === tab.id) renderData();
   try {
     const query = new URLSearchParams({ database: tab.db, schema: tab.schemaName, table: tab.table, page, pageSize: tab.pageSize });
+    const includeSize = !tab.sizeLoaded;
+    if (includeSize) query.set("includeSize", "1");
+    if (tab.sorts?.length) query.set("sort", JSON.stringify(tab.sorts));
     if (tab.cursorPaging && page > 1) query.set("cursor", tab.pageCursors[page]);
     const data = await apiRequest("/connections/" + encodeURIComponent(tab.connectionId) + "/rows?" + query, { signal: controller.signal });
     if (controller.signal.aborted || state.currentUser?.id !== userId || !state.tabs.includes(tab)) return;
@@ -275,6 +323,7 @@ export async function loadTablePage(tab, page = tab.page, recount = false) {
     if (!data.cursorPaging && pages !== null && page > pages) return loadTablePage(tab, pages);
     if (data.cursorPaging && page > 1 && !data.rows.length) return loadTablePage(tab, page - 1);
     tab.schema = data.columns;
+    if (includeSize) { tab.sizeBytes = data.sizeBytes ?? null; tab.sizeLoaded = true; }
     tab.primaryKey = data.primaryKey;
     tab.versions = data.versions;
     tab.keyValues = data.keyValues || null;
@@ -472,8 +521,13 @@ export function restoreTableLocation() {
     }
     revealTreeDestination(currentConnection, destination, isView);
     if (!destination.table) {
-      state.activeTabId = null;
-      renderAppShell();
+      if (currentConnection.engine === "PostgreSQL" && !schema) {
+        restoringLocation = false;
+        toast("The schema in this link is not available.");
+        syncTableLocation(true);
+        return;
+      }
+      openDatabaseOverview(currentConnection.id, destination.db, destination.schemaName);
       restoringLocation = false;
       navigationHash = location.hash;
       return;
@@ -540,6 +594,30 @@ export function handleWorkspaceAction(action, element) {
   const id = element.dataset.id;
   const activeTab = getActiveTab();
   switch (action) {
+    case "sort-overview": {
+      const field = element.dataset.field;
+      if (!activeTab?.overview || !["rows", "sizeBytes"].includes(field)) break;
+      const previous = activeTab.overviewSort;
+      activeTab.overviewSort = previous?.field !== field ? { field, dir: "asc" }
+        : previous.dir === "asc" ? { field, dir: "desc" } : null;
+      renderOverview(activeTab);
+      break;
+    }
+    case "refresh-overview":
+      connectToDatabase(activeTab.connectionId, async () => {
+        try {
+          await refreshDatabaseCatalog(activeTab.connectionId, activeTab.db);
+          await loadDatabaseOverview(activeTab);
+        } catch (error) { toast(error.message); }
+      });
+      break;
+    case "edit-overview-table":
+      openTable(id, element.dataset.db, element.dataset.table, false, element.dataset.schema);
+      if (getActiveTab()?.table === element.dataset.table) {
+        getActiveTab().view = "Structure";
+        renderWorkspace();
+      }
+      break;
     case "open-table":
       openTable(id, element.dataset.db, element.dataset.table, false, element.dataset.schema);
       break;
@@ -548,6 +626,7 @@ export function handleWorkspaceAction(action, element) {
       break;
     case "switch-tab":
       state.activeTabId = id;
+      if (getActiveTab()?.overview) getActiveTab().overviewLoaded = false;
       renderWorkspace();
       break;
     case "close-tab": {
@@ -599,6 +678,7 @@ export function initializeWorkspace(callbacks) {
     if (tabElement && event.target === tabElement && ["Enter", " "].includes(event.key)) {
       event.preventDefault();
       state.activeTabId = tabElement.dataset.id;
+      if (getActiveTab()?.overview) getActiveTab().overviewLoaded = false;
       renderWorkspace();
     }
   });

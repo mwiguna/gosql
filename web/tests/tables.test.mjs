@@ -74,6 +74,22 @@ test("table pages preserve exact strings and NULL, and encode identifiers as par
   assert.deepEqual(tab.constraints, [{ name: "unique" }]);
 });
 
+test("database column sorting is sent to the server on every page", async context => {
+  const tab = setup(context);
+  tab.sorts = [{ field: 'price"column', dir: "desc" }];
+  tab.totalRows = 45;
+  tab.countLoaded = true;
+  context.mock.method(globalThis, "fetch", async path => {
+    const params = new URL(path, "http://localhost").searchParams;
+    assert.deepEqual(JSON.parse(params.get("sort")), tab.sorts);
+    assert.equal(params.has("cursor"), false);
+    return { ok: true, status: 200, json: async () => ({ columns: [], rows: [["sorted"]], primaryKey: [], versions: [], indexes: [], constraints: [], cursorPaging: false }) };
+  });
+  await loadTablePage(tab, 2);
+  assert.equal(tab.page, 2);
+  assert.deepEqual(tab.rows, [["sorted"]]);
+});
+
 test("table page keeps the database read-only reason", async context => {
   const tab = setup(context);
   context.mock.method(globalThis, "fetch", async path => {
@@ -84,9 +100,10 @@ test("table page keeps the database read-only reason", async context => {
   assert.equal(tab.readOnlyReason, "Editing supports InnoDB, MyISAM, and Aria; this table uses MEMORY.");
 });
 
-test("row count is reused across pages and refreshed on demand", async context => {
+test("row count and table size are reused across pages and refreshed on demand", async context => {
   const tab = setup(context);
   const requests = [];
+  const sizeRequests = [];
   context.mock.method(globalThis, "fetch", async path => {
     const query = new URL(path, "http://localhost").searchParams;
     if (path.includes("/rows/count?")) {
@@ -94,7 +111,8 @@ test("row count is reused across pages and refreshed on demand", async context =
       return { ok: true, status: 200, json: async () => ({ totalRows: 45 }) };
     }
     requests.push(query.get("page"));
-    return { ok: true, status: 200, json: async () => ({ columns: [], rows: [[query.get("page")]], versions: [], primaryKey: [], indexes: [], constraints: [], hasMore: true }) };
+    sizeRequests.push(query.get("includeSize"));
+    return { ok: true, status: 200, json: async () => ({ columns: [], rows: [[query.get("page")]], versions: [], primaryKey: [], indexes: [], constraints: [], hasMore: true, ...(query.has("includeSize") ? { sizeBytes: 8192 } : {}) }) };
   });
   await loadTablePage(tab, 1);
   await new Promise(resolve => setImmediate(resolve));
@@ -103,6 +121,8 @@ test("row count is reused across pages and refreshed on demand", async context =
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(requests, ["1", "count", "2", "2", "count"]);
   assert.equal(tab.totalRows, 45);
+  assert.deepEqual(sizeRequests, ["1", null, "1"]);
+  assert.equal(tab.sizeBytes, 8192);
 });
 
 test("primary-key pages use saved cursors for Next and Previous", async context => {

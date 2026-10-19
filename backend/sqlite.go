@@ -674,13 +674,23 @@ func (a *application) handleSQLiteRows(w http.ResponseWriter, r *http.Request) {
 	}
 	result := tablePage{Columns: meta.Columns, Rows: [][]*string{}, Truncated: [][]bool{}, Versions: []string{}, KeyValues: [][]string{}, KeyTypes: [][]string{}, PrimaryKey: meta.PrimaryKey, Editable: meta.Editable, ReadOnlyReason: meta.ReadOnlyReason, Indexes: meta.Indexes, Constraints: meta.Constraints, SQLiteStrict: meta.Strict, SQLiteWithoutRowID: meta.WithoutRowID, SQLiteDDL: meta.Definition, SQLiteVirtual: meta.Kind == "virtual"}
 	result.CursorPaging = meta.Editable
+	sortOrder, err := tableSortOrder(q.Get("sort"), meta.Columns, meta.PrimaryKey, sqlitedb.Quote)
+	if err != nil {
+		writeError(w, 400, "invalid_sort", err.Error())
+		return
+	}
+	if sortOrder != "" {
+		result.CursorPaging = false
+	}
 	selected := make([]string, len(meta.Columns))
 	for i, c := range meta.Columns {
 		selected[i] = sqlitedb.Quote(c.Name)
 	}
 	suffix := " FROM main." + sqlitedb.Quote(q.Get("table"))
 	args := []any{}
-	if result.CursorPaging {
+	if sortOrder != "" {
+		suffix += " ORDER BY " + sortOrder
+	} else if result.CursorPaging {
 		if page > 1 {
 			var cursor sqliteCursor
 			bytes, decodeErr := base64.RawURLEncoding.DecodeString(q.Get("cursor"))
@@ -814,6 +824,12 @@ func (a *application) handleSQLiteRows(w http.ResponseWriter, r *http.Request) {
 	if result.HasMore && result.CursorPaging {
 		encoded, _ := json.Marshal(sqliteCursor{Table: q.Get("table"), Size: size, Values: lastValues, Types: lastTypes})
 		result.NextCursor = base64.RawURLEncoding.EncodeToString(encoded)
+	}
+	if q.Get("includeSize") == "1" && meta.Kind == "table" {
+		if err := conn.QueryRowContext(ctx, `SELECT SUM(d.pgsize) FROM main.sqlite_schema s
+			JOIN dbstat d ON d.name=s.name WHERE s.tbl_name=? AND s.type IN ('table','index')`, q.Get("table")).Scan(&result.SizeBytes); err != nil {
+			result.SizeBytes = nil
+		}
 	}
 	result.Duration = time.Since(started).Milliseconds()
 	writeJSON(w, 200, result)

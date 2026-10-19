@@ -84,6 +84,14 @@ func TestPostgresIntegration(t *testing.T) {
 	read := func(table string, page, size string, status int) *httptest.ResponseRecorder {
 		return readCursor(table, page, size, "", status)
 	}
+	for page, want := range map[string]string{"1": "45", "2": "43"} {
+		params := url.Values{"database": {fields.Database}, "schema": {schema}, "table": {"items"}, "page": {page}, "pageSize": {"2"}, "sort": {`[{"field":"id","dir":"desc"}]`}}
+		response := request(t, handler, "GET", path+"/rows?"+params.Encode(), "", cookie, 200)
+		var sorted tablePage
+		if err := json.Unmarshal(response.Body.Bytes(), &sorted); err != nil || sorted.CursorPaging || len(sorted.Rows) != 2 || *sorted.Rows[0][0] != want || len(sorted.Versions) != 2 {
+			t.Fatalf("sorted PostgreSQL page %s: %+v, %v", page, sorted, err)
+		}
+	}
 	var first, last tablePage
 	json.Unmarshal(read("items", "1", "20", 200).Body.Bytes(), &first)
 	var middle tablePage

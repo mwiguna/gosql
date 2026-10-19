@@ -82,12 +82,16 @@ export async function refreshDatabaseCatalog(id, database) {
   const catalog = await apiRequest("/connections/" + encodeURIComponent(id) + "/catalog?database=" + encodeURIComponent(database));
   if (databaseCatalogs.get(id) !== entry) return;
   entry.catalogs.set(database, catalog);
+  for (const tab of state.tabs) {
+    if (tab.overview && tab.connectionId === id && tab.db === database) tab.overviewLoaded = false;
+  }
   renderTree();
   return catalog;
 }
 
 let onWorkspaceChange;
 let onOpenTable;
+let onOpenOverview;
 let onRefreshTable;
 
 // -----------------------------------------------------------------------------
@@ -159,6 +163,7 @@ export function renderTree() {
       children.innerHTML = treeChildren.get(detail.dataset.treeKey)();
     }
   }));
+  syncTreeSelection();
 }
 
 function connectionTree(connection) {
@@ -242,14 +247,17 @@ function objectTree(connection, database, schemaName, groups) {
 
 export function syncTreeSelection() {
   const tab = getActiveTab();
-  findElements("#tree .tree-row.active").forEach((row) => row.classList.remove("active"));
+  findElements("#tree .tree-row.active, #tree summary.active").forEach((row) => row.classList.remove("active"));
   if (!tab) return;
-  const buttons = findElements('#tree [data-action="open-table"],#tree [data-action="open-view"]');
+  const buttons = findElements(tab.overview
+    ? '#tree [data-action="database"],#tree [data-action="database-schema"]'
+    : '#tree [data-action="open-table"],#tree [data-action="open-view"]');
   const selected = buttons.find((element) => element.dataset.id === tab.connectionId
     && element.dataset.db === tab.db
-    && element.dataset.schema === tab.schemaName
-    && element.dataset.table === tab.table);
-  selected?.parentElement.classList.add("active");
+    && (element.dataset.schema || "") === tab.schemaName
+    && (tab.overview || element.dataset.table === tab.table));
+  if (selected?.tagName === "SUMMARY") selected.classList.add("active");
+  else selected?.parentElement.classList.add("active");
 }
 
 async function inspectRoutine(element) {
@@ -1265,7 +1273,8 @@ function renameSchema(id, database, schema) {
       }
       for (const tab of state.tabs) if (tab.connectionId === id && tab.db === database && tab.schemaName === schema) {
         tab.schemaName = newName;
-        if (!tab.queryTab) tab.sql = `SELECT *\nFROM ${quoteSQL(newName)}.${quoteSQL(tab.table)}\nLIMIT 100;`;
+        if (tab.overview) { tab.title = newName; tab.overviewLoaded = false; }
+        else if (!tab.queryTab) tab.sql = `SELECT *\nFROM ${quoteSQL(newName)}.${quoteSQL(tab.table)}\nLIMIT 100;`;
       }
       onWorkspaceChange();
       try { await refreshDatabaseCatalog(id, database); } catch (error) { toast("Schema renamed, but the sidebar could not refresh: " + error.message); }
@@ -1365,15 +1374,23 @@ export function handleConnectionsAction(action, element) {
       if (expanded.has(key)) {
         expanded.delete(key);
         renderTree();
+        if (getConnectionById(id)?.engine !== "PostgreSQL") onOpenOverview?.(id, database);
       } else {
         connectToDatabase(id, async () => {
           try {
             if (!await loadDatabaseCatalog(id, database)) return;
             expanded.add(key);
             renderTree();
+            if (getConnectionById(id)?.engine !== "PostgreSQL") onOpenOverview?.(id, database);
           } catch (error) { toast(error.message); }
         });
       }
+      break;
+    }
+    case "database-schema": {
+      const { db, schema } = element.dataset;
+      treeOpen.set(`${id}:${db}:${schema}`, !element.closest("details").open);
+      onOpenOverview?.(id, db, schema);
       break;
     }
     case "refresh-database":
@@ -1446,5 +1463,6 @@ export function initializeConnections(callbacks) {
   // Render shell dikoordinasikan app.js untuk mencegah circular import.
   onWorkspaceChange = callbacks.onWorkspaceChange;
   onOpenTable = callbacks.onOpenTable;
+  onOpenOverview = callbacks.onOpenOverview;
   onRefreshTable = callbacks.onRefreshTable;
 }

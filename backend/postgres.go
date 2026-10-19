@@ -470,14 +470,25 @@ func (a *application) handlePostgresRows(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer conn.Close(context.Background())
-	result, err := readPostgresPage(ctx, conn, schema, table, page, size, query.Get("cursor"))
+	result, err := readPostgresPage(ctx, conn, schema, table, page, size, query.Get("cursor"), query.Get("sort"))
 	if err != nil {
+		if errors.Is(err, errInvalidTableSort) {
+			writeError(w, 400, "invalid_sort", err.Error())
+			return
+		}
 		if errors.Is(err, postgresdb.ErrInvalidPageCursor) {
 			writeError(w, 400, "invalid_page_cursor", "This page is no longer available. Return to the first page.")
 			return
 		}
 		writePostgresResult(w, postgresResult{}, err)
 		return
+	}
+	if query.Get("includeSize") == "1" {
+		if err := conn.QueryRow(ctx, `SELECT pg_catalog.pg_total_relation_size(c.oid)
+			FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+			WHERE n.nspname=$1 AND c.relname=$2 AND c.relkind IN ('r','m')`, schema, table).Scan(&result.SizeBytes); err != nil {
+			result.SizeBytes = nil
+		}
 	}
 	writeJSON(w, 200, result)
 }
@@ -532,7 +543,7 @@ func (a *application) handlePostgresCount(w http.ResponseWriter, r *http.Request
 	writeJSON(w, 200, map[string]int64{"totalRows": total})
 }
 
-func readPostgresPage(ctx context.Context, conn *pgx.Conn, schema, table string, page, size int, cursor string) (tablePage, error) {
+func readPostgresPage(ctx context.Context, conn *pgx.Conn, schema, table string, page, size int, cursor, sorting string) (tablePage, error) {
 	started := time.Now()
 	result := tablePage{Columns: []tableColumn{}, Rows: [][]*string{}, Truncated: [][]bool{}, Versions: []string{}, PrimaryKey: []string{}, Indexes: []tableIndex{}, Constraints: []tableConstraint{}}
 	meta, err := readPostgresTableMeta(ctx, conn, schema, table)
@@ -541,9 +552,6 @@ func readPostgresPage(ctx context.Context, conn *pgx.Conn, schema, table string,
 	}
 	result.PrimaryKey, result.Editable, result.Indexes, result.Constraints = meta.PrimaryKey, meta.Editable, meta.Indexes, meta.Constraints
 	result.CursorPaging = len(meta.PrimaryKey) > 0
-	if result.CursorPaging && page > 1 && cursor == "" {
-		return result, postgresdb.ErrInvalidPageCursor
-	}
 	columns, err := conn.Query(ctx, `SELECT a.attname, pg_catalog.format_type(a.atttypid,a.atttypmod), NOT a.attnotnull,
 		pg_catalog.pg_get_expr(d.adbin,d.adrelid),
 		(a.attgenerated = '' AND a.attidentity = '' AND pg_catalog.has_column_privilege(c.oid,a.attname,'UPDATE'))
@@ -574,6 +582,25 @@ func readPostgresPage(ctx context.Context, conn *pgx.Conn, schema, table string,
 	}
 	for _, key := range result.PrimaryKey {
 		order = append(order, pgx.Identifier{key}.Sanitize())
+	}
+	sortOrder, err := tableSortOrder(sorting, result.Columns, result.PrimaryKey, func(name string) string {
+		identifier := pgx.Identifier{name}.Sanitize()
+		for _, column := range result.Columns {
+			if column.Name == name && (column.Type == "json" || column.Type == "xml") {
+				return identifier + "::text"
+			}
+		}
+		return identifier
+	})
+	if err != nil {
+		return result, err
+	}
+	if sortOrder != "" {
+		order = []string{sortOrder}
+		result.CursorPaging = false
+	}
+	if result.CursorPaging && page > 1 && cursor == "" {
+		return result, postgresdb.ErrInvalidPageCursor
 	}
 	// LIMIT + 1 memberi status halaman berikutnya tanpa COUNT(*) terhadap seluruh tabel.
 	selected := make([]string, len(result.Columns))

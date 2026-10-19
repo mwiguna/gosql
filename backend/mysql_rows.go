@@ -322,7 +322,7 @@ func mysqlVersionSQL(columns []mysqlColumn) string {
 	return "CASE WHEN " + strings.Join(lengths, "+") + " > 1048576 THEN '' ELSE SHA2(CONCAT(" + strings.Join(parts, ",") + "),256) END"
 }
 
-func readMySQLPage(ctx context.Context, conn *sql.Conn, database, table string, page, size int, cursor string) (tablePage, error) {
+func readMySQLPage(ctx context.Context, conn *sql.Conn, database, table string, page, size int, cursor, sorting string) (tablePage, error) {
 	started := time.Now()
 	result := tablePage{Columns: []tableColumn{}, Rows: [][]*string{}, Truncated: [][]bool{}, Versions: []string{}, PrimaryKey: []string{}, Indexes: []tableIndex{}, Constraints: []tableConstraint{}}
 	meta, err := readMySQLMeta(ctx, conn, database, table)
@@ -340,6 +340,13 @@ func readMySQLPage(ctx context.Context, conn *sql.Conn, database, table string, 
 		if index < 0 || !slices.Contains([]string{"tinyint", "smallint", "mediumint", "int", "bigint", "decimal", "bit", "char", "varchar", "date", "time", "datetime", "timestamp", "year", "enum", "set"}, meta.Columns[index].DataType) {
 			result.CursorPaging = false
 		}
+	}
+	sortOrder, err := tableSortOrder(sorting, result.Columns, result.PrimaryKey, mysqldb.Identifier)
+	if err != nil {
+		return result, err
+	}
+	if sortOrder != "" {
+		result.CursorPaging = false
 	}
 	if result.CursorPaging && page > 1 && cursor == "" {
 		return result, errMySQLCursor
@@ -381,7 +388,9 @@ func readMySQLPage(ctx context.Context, conn *sql.Conn, database, table string, 
 		}
 		statement += " WHERE (" + strings.Join(keys, ",") + ") > (" + strings.Join(marks, ",") + ")"
 	}
-	if result.CursorPaging {
+	if sortOrder != "" {
+		statement += " ORDER BY " + sortOrder
+	} else if result.CursorPaging {
 		keys := make([]string, len(meta.PrimaryKey))
 		for i, key := range meta.PrimaryKey {
 			keys[i] = mysqldb.Identifier(key)
@@ -479,14 +488,22 @@ func (a *application) handleMySQLRows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer cleanup()
-	result, err := readMySQLPage(ctx, conn, database, table, page, size, query.Get("cursor"))
-	if errors.Is(err, errMySQLCursor) {
+	result, err := readMySQLPage(ctx, conn, database, table, page, size, query.Get("cursor"), query.Get("sort"))
+	if errors.Is(err, errInvalidTableSort) {
+		writeError(w, 400, "invalid_sort", err.Error())
+	} else if errors.Is(err, errMySQLCursor) {
 		writeError(w, 400, "invalid_page_cursor", "This page is no longer available. Return to the first page.")
 	} else if errors.Is(err, errMySQLPageLarge) {
 		writeError(w, 413, "page_too_large", "This page exceeds 8 MB. Choose a smaller page size.")
 	} else if err != nil {
 		writeMySQLError(w, err)
 	} else {
+		if query.Get("includeSize") == "1" {
+			if err := conn.QueryRowContext(ctx, `SELECT DATA_LENGTH+INDEX_LENGTH FROM INFORMATION_SCHEMA.TABLES
+				WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND TABLE_TYPE='BASE TABLE'`, database, table).Scan(&result.SizeBytes); err != nil {
+				result.SizeBytes = nil
+			}
+		}
 		writeJSON(w, 200, result)
 	}
 }

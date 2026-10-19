@@ -37,6 +37,7 @@ func (a *application) handler(files http.Handler) http.Handler {
 	mux.HandleFunc("/api/sqlite/pick-file", methods(a.handleSQLitePickFile, "POST"))
 	mux.HandleFunc("/api/connections/{id}/sqlite-file", methods(a.handleSQLiteFile, "POST", "GET"))
 	mux.HandleFunc("/api/connections/{id}/catalog", methods(a.databaseHandler(a.handlePostgresCatalog, a.handleMySQLCatalog, a.handleSQLiteCatalog), "GET", "POST"))
+	mux.HandleFunc("/api/connections/{id}/overview", methods(a.databaseHandler(a.handlePostgresOverview, a.handleMySQLOverview, a.handleSQLiteOverview), "GET"))
 	mux.HandleFunc("/api/connections/{id}/routines", methods(a.databaseHandler(a.handlePostgresRoutine, a.handleMySQLRoutine, a.handleSQLiteUnsupported), "GET"))
 	mux.HandleFunc("/api/connections/{id}/triggers", methods(a.databaseHandler(a.handlePostgresTrigger, a.handleMySQLTrigger, a.handleSQLiteTrigger), "GET", "POST", "PATCH", "DELETE"))
 	mux.HandleFunc("/api/connections/{id}/rows", methods(a.databaseHandler(a.handlePostgresRows, a.handleMySQLRows, a.handleSQLiteRows), "GET"))

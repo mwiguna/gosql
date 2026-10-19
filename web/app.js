@@ -5,7 +5,7 @@ import { initializeSession, logout, handleSessionExpired } from "./features/sess
 import { initializeApi } from "./api.js";
 import {
   handleWorkspaceAction, initializeWorkspace, openTable, renderAppShell,
-  resetWorkspace, restoreTableLocation, startWorkspace, tableLocation, loadTablePage, retryTableCount, openQueryTab
+  resetWorkspace, restoreTableLocation, startWorkspace, tableLocation, loadTablePage, retryTableCount, openQueryTab, openDatabaseOverview
 } from "./features/workspace.js";
 import {
   handleConnectionsAction, initializeConnections, connectToDatabase, getConnectionCatalog, objectSQLTemplate
@@ -182,6 +182,7 @@ function initializeAppEvents() {
     const element = event.target.closest("[data-action]");
     if (!element || element.disabled) return;
     const action = element.dataset.action;
+    if (action === "database-schema") event.preventDefault();
     if (handleAppAction(action, element)) return;
     if (handleConnectionsAction(action, element)) return;
     if (handleWorkspaceAction(action, element)) return;
@@ -199,7 +200,7 @@ function initializeAppEvents() {
 async function initializeApp() {
   initializeDialogs();
   initializeApi({ onUnauthorized: handleSessionExpired });
-  initializeConnections({ onWorkspaceChange: renderAppShell, onOpenTable: openTable, onRefreshTable: loadTablePage });
+  initializeConnections({ onWorkspaceChange: renderAppShell, onOpenTable: openTable, onOpenOverview: openDatabaseOverview, onRefreshTable: loadTablePage });
   initializeWorkspace({ onRunQuery: runQuery, onCloseTab: stopQueryForTab });
   initializeGrid({ onLoadTablePage: loadTablePage, onRetryTableCount: retryTableCount, onReconnectTable: tab => connectToDatabase(tab.connectionId, () => loadTablePage(tab, tab.page, true)) });
   initializeAppEvents();

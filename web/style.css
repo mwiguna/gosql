@@ -1377,6 +1377,24 @@ p {
   border: 1px solid var(--line);
   border-radius: 5px;
 }
+.overview-toolbar h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+.overview-tables {
+  margin-bottom: 16px;
+}
+.overview-tables td:first-child button {
+  max-width: 360px;
+  height: auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.tree-group > summary.active {
+  background: #e5f0ff;
+  color: var(--blue);
+}
 .toolbar > [data-action="schema-add"] {
   margin-left: auto;
 }

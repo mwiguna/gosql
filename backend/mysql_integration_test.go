@@ -58,7 +58,7 @@ func TestMySQLIntegration(t *testing.T) {
 	if _, err = conn.ExecContext(ctx, "INSERT INTO "+table+" (amount,note,bytes,payload,optional_date) VALUES (?,?,?,?,?)", "9007199254740993.1234567890", strings.Repeat("a", 600), []byte{0, 255}, `{"key":"value"}`, nil); err != nil {
 		t.Fatal(err)
 	}
-	page, err := readMySQLPage(ctx, conn, config.DBName, name, 1, 20, "")
+	page, err := readMySQLPage(ctx, conn, config.DBName, name, 1, 20, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestMySQLIntegration(t *testing.T) {
 	if _, err = conn.ExecContext(ctx, "UPDATE "+table+" SET `note`='changed' WHERE `id`=1"); err != nil {
 		t.Fatal(err)
 	}
-	changed, err := readMySQLPage(ctx, conn, config.DBName, name, 1, 20, "")
+	changed, err := readMySQLPage(ctx, conn, config.DBName, name, 1, 20, "", "")
 	if err != nil || changed.Versions[0] == page.Versions[0] {
 		t.Fatalf("non-edited column did not change row token: %v", err)
 	}
@@ -92,13 +92,19 @@ func TestMySQLIntegration(t *testing.T) {
 	if _, err = conn.ExecContext(ctx, "INSERT INTO "+table+" (id,amount) VALUES (?,?)", "9007199254740994", "1.0000000000"); err != nil {
 		t.Fatal(err)
 	}
-	first, err := readMySQLPage(ctx, conn, config.DBName, name, 1, 1, "")
+	first, err := readMySQLPage(ctx, conn, config.DBName, name, 1, 1, "", "")
 	if err != nil || !first.HasMore || first.NextCursor == "" {
 		t.Fatalf("first BIGINT page: %+v, %v", first, err)
 	}
-	second, err := readMySQLPage(ctx, conn, config.DBName, name, 2, 1, first.NextCursor)
+	second, err := readMySQLPage(ctx, conn, config.DBName, name, 2, 1, first.NextCursor, "")
 	if err != nil || len(second.Rows) != 1 || *second.Rows[0][0] != "9007199254740994" {
 		t.Fatalf("BIGINT keyset lost precision: %+v, %v", second, err)
+	}
+	for page, want := range map[int]string{1: "9007199254740994", 2: "9007199254740993"} {
+		sorted, err := readMySQLPage(ctx, conn, config.DBName, name, page, 1, "", `[{"field":"id","dir":"desc"}]`)
+		if err != nil || sorted.CursorPaging || len(sorted.Rows) != 1 || *sorted.Rows[0][0] != want || len(sorted.Versions) != 1 {
+			t.Fatalf("sorted MySQL page %d: %+v, %v", page, sorted, err)
+		}
 	}
 }
 

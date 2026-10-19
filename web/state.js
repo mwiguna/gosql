@@ -30,6 +30,7 @@ export const engines = ["PostgreSQL", "MySQL", "MariaDB", "SQLite"];
  * @property {string} title
  * @property {string} sql
  * @property {boolean} queryTab
+ * @property {boolean} [overview]
  * @property {boolean} consoleOpen
  * @property {"Data"|"Structure"|"Indexes"|"Constraints"} view
  * @property {Object[]} rows
