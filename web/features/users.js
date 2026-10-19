@@ -123,15 +123,6 @@ export function handleUsersAction(action, element) {
         deleteUser(id).catch(error => toast(error.message));
       });
       break;
-    case "account":
-      showDialog("Your account", `<div class="stack">
-        <div class="row">
-          <span class="avatar">${escapeHtml(state.currentUser.username.slice(0, 2).toUpperCase())}</span>
-          <div><h3>${escapeHtml(state.currentUser.username)}</h3><p class="hint">${state.currentUser.role}</p></div>
-        </div>
-        ${button("change-password", "Change Password", "key")}${button("logout", "Sign Out", "logout")}
-      </div>`);
-      break;
     case "change-password":
       openPasswordDialog(state.currentUser.id);
       break;

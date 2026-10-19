@@ -41,18 +41,6 @@ function handleAppAction(action, element) {
     case "logout":
       logout();
       break;
-    case "settings":
-      showDialog("Workspace settings", `<div class="stack">
-        <div class="row between"><span>Appearance</span><span class="pill">LIGHT</span></div>
-        <div class="row between"><span>Language</span><span class="muted">English</span></div>
-        <div class="row between"><span>Row density</span><span class="muted">Compact</span></div>
-        <div class="rule"></div>
-        <p class="hint">Profiles, saved queries, and history are private to your account. The current table is stored in the URL and reopened after refresh or login. Query results and editor text are not restored. Remember me keeps only your account signed in for up to 30 days.</p>
-        <div class="notice">${icon("info")}
-          <span>PostgreSQL, MySQL, and MariaDB tables with a supported primary key can be edited or deleted when the database account has permission. Imports and exports are not available yet.</span>
-        </div>
-      </div>`, button("close-dialog", "Done"));
-      break;
     case "help":
       showDialog("Explore GoSQL", `<div class="stack">
         <p>Create a PostgreSQL, MySQL, or MariaDB connection profile to browse your database.</p>
@@ -171,9 +159,21 @@ function initializeAppEvents() {
     if (!state.currentUser || !element) return;
     if (openNavigationMenu(element, domEvent.clientX, domEvent.clientY)) domEvent.preventDefault();
   });
-  document.addEventListener("click", closeNavigationMenu);
+  document.addEventListener("click", event => {
+    closeNavigationMenu();
+    const account = findElement(".account-menu[open]");
+    if (account && (!account.contains(event.target) || event.target.closest("[data-action]"))) account.open = false;
+  });
   document.addEventListener("keydown", (domEvent) => {
-    if (domEvent.key === "Escape") closeNavigationMenu();
+    if (domEvent.key === "Escape") {
+      closeNavigationMenu();
+      const account = findElement(".account-menu[open]");
+      if (account) { account.open = false; account.querySelector("summary").focus(); }
+    }
+  });
+  document.addEventListener("focusin", event => {
+    const account = findElement(".account-menu[open]");
+    if (account && !account.contains(event.target)) account.open = false;
   });
   window.addEventListener("blur", closeNavigationMenu);
   window.addEventListener("resize", closeNavigationMenu);

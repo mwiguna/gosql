@@ -298,6 +298,60 @@ p {
   display: grid;
   place-items: center;
 }
+.account-menu {
+  position: relative;
+  flex-shrink: 0;
+}
+.account-menu > summary {
+  display: flex;
+  padding: 6px;
+  border-radius: 5px;
+  list-style: none;
+  cursor: pointer;
+}
+.account-menu > summary::-webkit-details-marker {
+  display: none;
+}
+.account-menu > summary:hover,
+.account-menu[open] > summary {
+  background: #f1f5fc;
+}
+.account-menu > summary:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+.account-menu .account-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 230px;
+  max-width: calc(100vw - 24px);
+}
+.account-header {
+  padding: 10px 12px 12px;
+  margin-bottom: 5px;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.account-header strong,
+.account-header small {
+  display: block;
+}
+.account-header small {
+  margin-top: 4px;
+}
+.account-dropdown ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.account-menu .account-dropdown button {
+  display: flex;
+  justify-content: flex-start;
+}
+.account-dropdown button.danger {
+  color: #be3641;
+}
 .shell-body {
   display: flex;
   min-width: 0;
@@ -1602,6 +1656,14 @@ input[type=file] {
   background: #fff7f7;
   border-color: #f1c4c8;
 }
+.table-column-default input,
+.table-column-default .remove-column {
+  height: 36px;
+  min-height: 36px;
+}
+.add-table-column {
+  align-self: flex-start;
+}
 .table-column-default .remove-column:hover,
 .table-column-default .remove-column:focus-visible {
   color: #a52631;
@@ -2327,12 +2389,6 @@ button svg {
 /* --------------------------------------------------------------------------
    Toolbar icon and mobile label adjustments
    -------------------------------------------------------------------------- */
-.topbar button[data-action=settings] svg {
-  width: 20px;
-  height: 20px;
-  stroke-width: 1.5;
-  stroke-linejoin: round;
-}
 @media (max-width: 760px) {
   .shell-body {
     padding-right: 10px;

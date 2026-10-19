@@ -809,7 +809,7 @@ function createSQLiteTable(id, database) {
         <label class="check-label"><input type="checkbox" name="withoutRowid">WITHOUT ROWID</label></div>
       <div id="sqlite-table-columns" class="stack">${sqliteColumnRow({ name: "id", type: "INTEGER", nullable: false, primary: true })}</div>
       <datalist id="sqlite-reference-tables">${(getConnectionCatalog(id, database)?.tables || []).map(table => `<option value="${escapeHtml(table)}">`).join("")}</datalist>
-      <button type="button" id="sqlite-add-column">${icon("plus")}Add column</button>
+      <button type="button" id="sqlite-add-column" class="add-table-column">${icon("plus")}Add column</button>
       <pre id="sqlite-create-preview" class="sql-preview"></pre>
       <div id="sqlite-create-error" class="error-text" role="alert"></div>
       <button type="submit" class="primary">Create table</button>
@@ -896,7 +896,7 @@ function createTable(id, database, schemaName) {
         <p class="hint">${escapeHtml(database)} / ${escapeHtml(schemaName)}</p>
         <label>Table name<input name="table" required maxlength="63" autofocus></label>
         <div id="create-table-columns" class="stack">${columnRow({ name: "id", type: "bigserial", nullable: false, primary: true }, catalog.types)}</div>
-        <button type="button" id="create-table-add-column">${icon("plus")}Add column</button>
+        <button type="button" id="create-table-add-column" class="add-table-column">${icon("plus")}Add column</button>
         <div id="create-table-error" class="error-text" role="alert"></div>
         <button type="submit" class="primary">Create table</button>
       </form>`, "", true);
@@ -979,7 +979,7 @@ function createMySQLTable(id, database) {
     <label>Table name<input name="table" required maxlength="64" autofocus></label>
     <label>Storage engine<select name="engine">${mysqlEngineOptions(getConnectionById(id)?.engine)}</select></label>
     <div id="mysql-table-columns" class="stack">${row()}</div>
-    <button type="button" id="mysql-add-column">${icon("plus")}Add column</button>
+    <button type="button" id="mysql-add-column" class="add-table-column">${icon("plus")}Add column</button>
     <div id="create-table-error" class="error-text" role="alert"></div>
     <button type="submit" class="primary">Create table</button>
   </form>`, "", true);

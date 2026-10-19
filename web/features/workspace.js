@@ -66,10 +66,18 @@ export function renderAppShell() {
       ${brand()}<span class="top-divider"></span><span class="top-title">Database Workspace</span>
       <span class="spacer"></span><span class="pill">DATABASE WORKSPACE</span>
       ${iconButton("help", "Help and shortcuts", "help")}
-      ${iconButton("settings", "Workspace settings", "settings")}
-      <button class="ghost icon" data-action="account" aria-label="Account menu">
-        <span class="avatar">${escapeHtml(state.currentUser.username.slice(0, 2).toUpperCase())}</span>
-      </button>
+      <details class="account-menu">
+        <summary aria-label="Account menu" title="Your account">
+          <span class="avatar">${escapeHtml(state.currentUser.username.slice(0, 2).toUpperCase())}</span>
+        </summary>
+        <div class="context-menu account-dropdown">
+          <div class="account-header"><strong>${escapeHtml(state.currentUser.username)}</strong><small>${escapeHtml(state.currentUser.role)}</small></div>
+          <ul aria-label="Account actions">
+            <li>${button("change-password", "Change Password", "key")}</li>
+            <li>${button("logout", "Sign Out", "logout", "danger")}</li>
+          </ul>
+        </div>
+      </details>
     </header>
     <div class="shell-body">
       <aside class="sidebar" aria-label="Connections">
